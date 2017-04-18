@@ -105,6 +105,11 @@ object Launcher {
         Driver(() => new Stack(8), backendName) {
           (c) => new StackTests(c)
         }
+      },
+      "SortingNetwork" -> { (backendName: String) =>
+        Driver(() => new SortingNetwork(1, 64), backendName) {
+          (c) => new SortingNetworkTests(c)
+        }
       }
   )
   def main(args: Array[String]): Unit = {
