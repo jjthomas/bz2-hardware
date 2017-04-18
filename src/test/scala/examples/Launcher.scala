@@ -102,7 +102,7 @@ object Launcher {
         }
       },
       "SortingNetwork" -> { (backendName: String) =>
-        Driver(() => new SortingNetwork(1, 64), backendName) {
+        Driver(() => new SortingNetwork(4, 64), backendName) {
           (c) => new SortingNetworkTests(c)
         }
       }
