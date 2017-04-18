@@ -65,13 +65,15 @@ class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSiz
   }
 
   def makeBitonicFromSorted(start: Int, end: Int, depth: Int): Unit = {
+    assert((end - start) % 2 == 0)
     val halfRange = (end - start) / 2
     for (i <- 0 until halfRange) {
-      cmp(i, end - 1 - i, depth)
+      cmp(start + i, end - 1 - i, depth)
     }
   }
 
   def cutBitonic(start: Int, end: Int, depth: Int): Unit = {
+    assert((end - start) % 2 == 0)
     val halfRange = (end - start) / 2
     for (i <- start until start + halfRange) {
       cmp(i, i + halfRange, depth)

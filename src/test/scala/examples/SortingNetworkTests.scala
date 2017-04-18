@@ -1,6 +1,6 @@
 package examples
 
-import chisel3.iotesters.{ChiselFlatSpec, Driver, PeekPokeTester}
+import chisel3.iotesters.PeekPokeTester
 
 class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
   for (i <- 0 until c.size) {
@@ -20,14 +20,5 @@ class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
   expect(c.io.outValid, true)
   for (i <- 0 until c.size) {
     expect(c.io.out(i), i)
-  }
-}
-
-class SortingNetworkTester extends ChiselFlatSpec {
-  behavior of "SortingNetwork"
-  backends foreach {backend =>
-    it should s"correctly sort already sorted numbers in $backend" in {
-      Driver(() => new SortingNetwork(1, 64), backend)(c => new SortingNetworkTests(c)) should be (true)
-    }
   }
 }
