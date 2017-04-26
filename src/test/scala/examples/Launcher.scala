@@ -102,8 +102,13 @@ object Launcher {
         }
       },
       "SortingNetwork" -> { (backendName: String) =>
-        Driver(() => new SortingNetwork(4, 64), backendName) {
+        Driver(() => new SortingNetwork(1, 21), backendName) {
           (c) => new SortingNetworkTests(c)
+        }
+      },
+      "Merger" -> { (backendName: String) =>
+        Driver(() => new Merger(1, 2, 21), backendName) {
+          (c) => new MergerTests(c)
         }
       }
   )
