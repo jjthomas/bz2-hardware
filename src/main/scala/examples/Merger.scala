@@ -18,15 +18,16 @@ class Merger(pieceSize: Int, numPieces: Int, cmpSize: Int) extends Module {
 
   val pieces = new Array[Mem[UInt]](numPieces)
   for (i <- 0 until numPieces) {
+    // TODO convert to SyncReadMem so BRAMs can be used
     pieces(i) = Mem(pieceSize, UInt(64.W))
   }
 
   val counters = new Array[UInt](numPieces)
   for (i <- 0 until numPieces) {
-    counters(i) = Reg(init = 0.asUInt(util.log2Up(pieceSize).W))
+    counters(i) = Reg(init = 0.asUInt(util.log2Up(pieceSize + 1).W))
   }
 
-  val fillCounter = Reg(init = 0.asUInt(util.log2Up(numPieces).W))
+  val fillCounter = Reg(init = 0.asUInt(util.log2Up(numPieces + 1).W))
   val drainCounter = Reg(init = 0.asUInt(util.log2Up(totalEls).W))
 
   val fillSpace = Wire(Bool())
@@ -35,7 +36,7 @@ class Merger(pieceSize: Int, numPieces: Int, cmpSize: Int) extends Module {
   // TODO decoder optimization to gate the BRAMs
 
   for (i <- 0 until numPieces) {
-    when(fillSpace && io.blockValid) { // TODO ensure only one signal generated here
+    when(fillSpace && io.blockValid) {
       when(fillCounter === i.U) {
         pieces(i)(counters(i)) := io.block
         when(counters(i) === (pieceSize - 1).U) {
@@ -59,7 +60,7 @@ class Merger(pieceSize: Int, numPieces: Int, cmpSize: Int) extends Module {
   io.out := minValue(63, 0)
 
   when (canOutput) {
-    when (drainCounter === (totalEls - 1).U) { // TODO also ensure one signal for this
+    when (drainCounter === (totalEls - 1).U) {
       drainCounter := 0.U
       fillCounter := 0.U
     } .otherwise {

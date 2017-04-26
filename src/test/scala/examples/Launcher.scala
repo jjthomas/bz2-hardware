@@ -112,7 +112,7 @@ object Launcher {
         }
       },
       "Merger" -> { (backendName: String) =>
-        Driver(() => new Merger(1, 2, 21), backendName) {
+        Driver(() => new Merger(4, 4, 21), backendName) {
           (c) => new MergerTests(c)
         }
       }
