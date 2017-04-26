@@ -9,7 +9,6 @@ class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSiz
     val blockValid = Input(Bool())
     val block = Input(UInt(64.W))
     val downstreamReady = Input(Bool())
-    val reset = Input(Bool())
     val thisReady = Output(Bool())
     val outValid = Output(Bool())
     val out = Output(UInt(64.W))
@@ -29,16 +28,6 @@ class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSiz
 
   io.out := networkStages(networkDepth - 1)(numDrained)
   io.outValid := stageValids(networkDepth - 1)
-
-  when (io.reset) {
-    numFilled := 0.U
-    numDrained := 0.U
-  }
-  for (i <- 0 until networkDepth) {
-    when (io.reset) {
-      stageValids(i) := false.B
-    }
-  }
 
   advance := !stageValids(networkDepth - 1)
   for (i <- 1 until networkDepth) {
