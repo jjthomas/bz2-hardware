@@ -18,7 +18,7 @@ class Merger(pieceSize: Int, numPieces: Int, cmpSize: Int) extends Module {
 
   val pieces = new Array[Mem[UInt]](numPieces)
   for (i <- 0 until numPieces) {
-    // TODO convert to SyncReadMem so BRAMs can be used
+    // TODO convert to SyncReadMem if needed
     pieces(i) = Mem(pieceSize, UInt(64.W))
   }
 
