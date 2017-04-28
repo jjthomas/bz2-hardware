@@ -115,6 +115,11 @@ object Launcher {
         Driver(() => new ShiftSorter(5, 21), backendName) {
           (c) => new ShiftSorterTests(c)
         }
+      },
+      "InsertionSorter" -> { (backendName: String) =>
+        Driver(() => new InsertionSorter(4, 21), backendName) {
+          (c) => new InsertionSorterTests(c)
+        }
       }
   )
   def main(args: Array[String]): Unit = {
