@@ -3,10 +3,9 @@ package examples
 import chisel3._
 import chisel3.core.{Bundle, Module}
 
-// cmpSize must be set so that there is an unused max value of all 1's
 // size must be greater than 1
-class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int, wordBits: Int
-  val numEls = size
+class InsertionSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int, wordBits: Int
+val numEls = size
 
   val io = IO(new Bundle {
     val blockValid = Input(Bool())
@@ -19,46 +18,52 @@ class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int
 
   val regs = Reg(init = Vec.do_fill(size) { ((1 << cmpBits) - 1).asUInt(64.W) })
   val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
-  val settleCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
-  val drainCounter = Reg(init = (size - 1).asUInt(util.log2Up(size).W))
+  val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
 
   val moreSpace = Wire(Bool())
   moreSpace := fillCounter < size.U
   io.thisReady := moreSpace
 
   val canOut = Wire(Bool())
-  canOut := settleCounter === (size - 1).U && io.downstreamReady
+  canOut := fillCounter === size.U && io.downstreamReady
   io.outValid := canOut
   io.out := regs(drainCounter)
 
   when (moreSpace && io.blockValid) {
     fillCounter := fillCounter + 1.U
-    regs((size - 1).U - fillCounter) := io.block
-  }
-
-  when (!moreSpace && settleCounter < (size - 1).U) {
-    settleCounter := settleCounter + 1.U
   }
 
   for (i <- 0 until size - 1) {
-    when (regs(i)(cmpBits - 1, 0) < regs(i + 1)(cmpBits - 1, 0)) {
-      regs(i) := regs(i + 1)
-      regs(i + 1) := regs(i)
+    when (moreSpace && io.blockValid) {
+      when(regs(i)(cmpBits - 1, 0) >= io.block(cmpBits - 1, 0)) {
+        regs(i + 1) := regs(i)
+      }
     }
   }
 
+  val minSize = util.log2Up(size) + 1
+  val minValue = Wire(UInt(minSize.W))
+  val comps = Wire(Vec(size, UInt(minSize.W)))
+  minValue := comps.reduce((a, b) => Mux(a < b, a, b))
+  for (i <- 0 until size) {
+    comps(i) := (regs(i)(cmpBits - 1, 0) < io.block(cmpBits - 1, 0))##i.asUInt(util.log2Up(size).W)
+  }
+
+  when (moreSpace && io.blockValid) {
+    regs(minValue(minSize - 2, 0)) := io.block
+  }
+
   when (canOut) {
-    when (drainCounter === 0.U) {
-      drainCounter := (size - 1).U
+    when (drainCounter === (size - 1).U) {
+      drainCounter := 0.U
       fillCounter := 0.U
-      settleCounter := 0.U
     } .otherwise {
-      drainCounter := drainCounter - 1.U
+      drainCounter := drainCounter + 1.U
     }
   }
 
   for (i <- 0 until size) {
-    when (drainCounter === 0.U) {
+    when (drainCounter === (size - 1).U) {
       regs(i) := ((1 << cmpBits) - 1).U
     }
   }
