@@ -115,6 +115,11 @@ object Launcher {
         Driver(() => new Merger(4, 4, 21), backendName) {
           (c) => new MergerTests(c)
         }
+      },
+      "ShiftSorter" -> { (backendName: String) =>
+        Driver(() => new ShiftSorter(5, 21), backendName) {
+          (c) => new ShiftSorterTests(c)
+        }
       }
   )
   def main(args: Array[String]): Unit = {

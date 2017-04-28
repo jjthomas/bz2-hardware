@@ -50,7 +50,7 @@ class Merger(pieceSize: Int, numPieces: Int, cmpSize: Int) extends Module {
   }
 
   val canOutput = Wire(Bool())
-  canOutput := !fillSpace && drainCounter < totalEls.U
+  canOutput := !fillSpace && io.downstreamReady
   io.outValid := canOutput
 
   val minSize = util.log2Up(numPieces) + 64
