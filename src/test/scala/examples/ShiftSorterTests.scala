@@ -12,7 +12,7 @@ class ShiftSorterTests(c: ShiftSorter) extends PeekPokeTester(c) {
   }
   expect(c.io.thisReady, false)
   poke(c.io.blockValid, false)
-  step(c.numEls - 1)
+  step(1) // wait cycle
   for (i <- 0 until c.numEls) {
     expect(c.io.outValid, true)
     expect(c.io.out, i)
