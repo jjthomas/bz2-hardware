@@ -117,12 +117,12 @@ object Launcher {
         }
       },
       "ShiftSorter" -> { (backendName: String) =>
-        Driver(() => new ShiftSorter(5, 21), backendName) {
+        Driver(() => new ShiftSorter(32, 21), backendName) {
           (c) => new ShiftSorterTests(c)
         }
       },
       "InsertionSorter" -> { (backendName: String) =>
-        Driver(() => new InsertionSorter(4, 21), backendName) {
+        Driver(() => new InsertionSorter(32, 21), backendName) {
           (c) => new InsertionSorterTests(c)
         }
       }

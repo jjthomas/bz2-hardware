@@ -3,7 +3,7 @@ package examples
 import chisel3._
 import chisel3.core.{Bundle, Module}
 
-// cmpSize must be set so that there is an unused max value of all 1's
+// 0 must be an unused min value
 // size must be greater than 1
 class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int, wordBits: Int
   val numEls = size
@@ -17,17 +17,17 @@ class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int
     val out = Output(UInt(64.W))
   })
 
-  val regs = Reg(init = Vec.do_fill(size) { ((1 << cmpBits) - 1).asUInt(64.W) })
+  val regs = Reg(init = Vec.do_fill(size) { 0.asUInt(64.W) })
   val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
-  val settleCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
-  val drainCounter = Reg(init = (size - 1).asUInt(util.log2Up(size).W))
+  val waitToggle = Reg(init = false.B)
+  val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
 
   val moreSpace = Wire(Bool())
   moreSpace := fillCounter < size.U
   io.thisReady := moreSpace
 
   val canOut = Wire(Bool())
-  canOut := settleCounter === (size - 1).U && io.downstreamReady
+  canOut := waitToggle && io.downstreamReady
   io.outValid := canOut
   io.out := regs(drainCounter)
 
@@ -36,30 +36,30 @@ class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int
     regs((size - 1).U - fillCounter) := io.block
   }
 
-  when (!moreSpace && settleCounter < (size - 1).U) {
-    settleCounter := settleCounter + 1.U
+  when (!moreSpace && !waitToggle) {
+    waitToggle := true.B
   }
 
   for (i <- 0 until size - 1) {
-    when (regs(i)(cmpBits - 1, 0) < regs(i + 1)(cmpBits - 1, 0)) {
+    when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
       regs(i) := regs(i + 1)
       regs(i + 1) := regs(i)
     }
   }
 
   when (canOut) {
-    when (drainCounter === 0.U) {
-      drainCounter := (size - 1).U
+    when (drainCounter === (size - 1).U) {
+      drainCounter := 0.U
       fillCounter := 0.U
-      settleCounter := 0.U
+      waitToggle := false.B
     } .otherwise {
-      drainCounter := drainCounter - 1.U
+      drainCounter := drainCounter + 1.U
     }
   }
 
   for (i <- 0 until size) {
-    when (drainCounter === 0.U) {
-      regs(i) := ((1 << cmpBits) - 1).U
+    when (drainCounter === (size - 1).U) {
+      regs(i) := 0.U
     }
   }
 
