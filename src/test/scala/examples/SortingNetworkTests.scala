@@ -5,8 +5,8 @@ import chisel3.iotesters.PeekPokeTester
 class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
   poke(c.io.downstreamReady, true)
   poke(c.io.blockValid, true)
-  for (i <- 0 until c.size) {
-    poke(c.io.block, i)
+  for (i <- 0 until c.size by c.ioElsPub) {
+    poke(c.io.block, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray))
     expect(c.io.thisReady, true)
     step(1)
   }
@@ -16,9 +16,9 @@ class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
     step(1)
     expect(c.io.thisReady, true)
   }
-  for (i <- 0 until c.size) {
+  for (i <- 0 until c.size by c.ioElsPub) {
     expect(c.io.outValid, true)
-    expect(c.io.out, i)
+    expect(c.io.out, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray))
     step(1)
   }
   expect(c.io.outValid, false)
