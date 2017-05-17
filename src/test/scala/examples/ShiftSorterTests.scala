@@ -2,11 +2,11 @@ package examples
 
 import chisel3.iotesters.PeekPokeTester
 
-class ShiftSorterTests(c: ShiftSorter) extends PeekPokeTester(c) {
+class ShiftSorterTests(c: ParallelShiftSorter) extends PeekPokeTester(c) {
   poke(c.io.downstreamReady, true)
   poke(c.io.blockValid, true)
   for (i <- 0 until c.numEls) {
-    poke(c.io.block, i)
+    poke(c.io.block, SorterTestUtils.genField((0 until c.ioElsPub).map(_ => i).toArray))
     expect(c.io.thisReady, true)
     step(1)
   }
@@ -15,7 +15,7 @@ class ShiftSorterTests(c: ShiftSorter) extends PeekPokeTester(c) {
   step(1) // wait cycle
   for (i <- 0 until c.numEls) {
     expect(c.io.outValid, true)
-    expect(c.io.out, i)
+    expect(c.io.out, SorterTestUtils.genField((0 until c.ioElsPub).map(_ => i).toArray))
     step(1)
   }
   expect(c.io.outValid, false)
