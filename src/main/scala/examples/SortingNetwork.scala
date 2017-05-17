@@ -1,24 +1,27 @@
 package examples
 
 import chisel3._
+import chisel3.util.Cat
 
-class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSize: Int, wordSize: Int
+class SortingNetwork(logSize: Int, ioEls: Int, cmpSize: Int) extends Module { // wordSize: Int
   val size = 1 << logSize
+  val ioElsPub = ioEls
+  assert (size % ioEls == 0)
 
   val io = IO(new Bundle {
     val blockValid = Input(Bool())
-    val block = Input(UInt(64.W))
+    val block = Input(UInt((64 * ioEls).W))
     val downstreamReady = Input(Bool())
     val thisReady = Output(Bool())
     val outValid = Output(Bool())
-    val out = Output(UInt(64.W))
+    val out = Output(UInt((64 * ioEls).W))
   })
 
   val networkDepth = logSize * (logSize + 1) / 2 + 1 // extra one for the outputs
   val networkStages = new Array[Vec[UInt]](networkDepth)
   val stageValids = new Array[Bool](networkDepth)
-  val numFilled = Reg(init = 0.asUInt((logSize + 1).W))
-  val numDrained = Reg(init = 0.asUInt((logSize + 1).W))
+  val numFilled = Reg(init = 0.asUInt(logSize.W))
+  val numDrained = Reg(init = 0.asUInt(logSize.W))
   val advance = Wire(Bool())
 
   for (i <- 0 until networkDepth) {
@@ -26,7 +29,7 @@ class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSiz
     stageValids(i) = Reg(init = false.B)
   }
 
-  io.out := networkStages(networkDepth - 1)(numDrained)
+  io.out := Cat((ioEls - 1 to 0 by -1).map(i => networkStages(networkDepth - 1)(numDrained + i.U)))
   io.outValid := stageValids(networkDepth - 1)
 
   advance := !stageValids(networkDepth - 1)
@@ -41,22 +44,24 @@ class SortingNetwork(logSize: Int, cmpSize: Int) extends Module { // transferSiz
   }
 
   when (io.blockValid && !stageValids(0)) {
-    networkStages(0)(numFilled(logSize - 1, 0)) := io.block
-    when (numFilled === (size - 1).U) {
+    for (i <- 0 until ioEls) {
+      networkStages(0)(numFilled + i.U) := io.block((i + 1) * 64 - 1, i * 64)
+    }
+    when (numFilled === (size - ioEls).U) {
       numFilled := 0.U
       stageValids(0) := true.B
     } .otherwise {
-      numFilled := numFilled + 1.U
+      numFilled := numFilled + ioEls.U
     }
   }
   io.thisReady := !stageValids(0)
 
   when (io.downstreamReady && stageValids(networkDepth - 1)) {
-    when (numDrained === (size - 1).U) {
+    when (numDrained === (size - ioEls).U) {
       numDrained := 0.U
       stageValids(networkDepth - 1) := false.B
     } .otherwise {
-      numDrained := numDrained + 1.U
+      numDrained := numDrained + ioEls.U
     }
   }
 
