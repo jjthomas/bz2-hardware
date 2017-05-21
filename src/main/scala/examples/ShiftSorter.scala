@@ -5,8 +5,9 @@ import chisel3.core.{Bundle, Module}
 
 // 0 must be an unused min value
 // size must be greater than 1
-class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int, wordBits: Int
+class ShiftSorter(size: Int, cmpBits: Int, treeSelector: Boolean) extends Module { // wordBits: Int
   val numEls = size
+  assert(util.isPow2(size))
 
   val io = IO(new Bundle {
     val blockValid = Input(Bool())
@@ -29,7 +30,18 @@ class ShiftSorter(size: Int, cmpBits: Int) extends Module { // transferSize: Int
   val canOut = Wire(Bool())
   canOut := waitToggle && io.downstreamReady
   io.outValid := canOut
-  io.out := regs(drainCounter)
+
+  def selectRegs(start: Int, end: Int): UInt = {
+    val mid = (start + end) / 2
+    val base = (end - start) == 2
+    Mux(drainCounter(util.log2Up(end - start) - 1), if (base) regs(start + 1) else selectRegs(mid, end),
+      if (base) regs(start) else selectRegs(start, mid))
+  }
+  if (treeSelector) {
+    io.out := selectRegs(0, size)
+  } else {
+    io.out := regs(drainCounter)
+  }
 
   when (moreSpace && io.blockValid) {
     fillCounter := fillCounter + 1.U

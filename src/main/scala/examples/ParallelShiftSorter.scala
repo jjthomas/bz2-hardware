@@ -6,7 +6,7 @@ import chisel3.util.Cat
 
 // 0 must be an unused min value
 // size must be greater than 1
-class ParallelShiftSorter(size: Int, ioEls: Int, cmpBits: Int) extends Module { // wordBits: Int
+class ParallelShiftSorter(size: Int, ioEls: Int, cmpBits: Int, treeSelector: Boolean) extends Module { // wordBits: Int
   val ioElsPub = ioEls
   val numEls = size
 
@@ -21,7 +21,7 @@ class ParallelShiftSorter(size: Int, ioEls: Int, cmpBits: Int) extends Module { 
 
   val sorters = new Array[ShiftSorter](ioEls)
   for (i <- 0 until ioEls) {
-    sorters(i) = Module(new ShiftSorter(size, cmpBits))
+    sorters(i) = Module(new ShiftSorter(size, cmpBits, treeSelector))
     sorters(i).io.block := io.block((i + 1) * 64 - 1, i * 64)
     sorters(i).io.blockValid := io.blockValid
     sorters(i).io.downstreamReady := io.downstreamReady
