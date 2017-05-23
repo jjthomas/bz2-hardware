@@ -29,7 +29,7 @@ class ShiftSorter(size: Int, cmpBits: Int, treeSelector: Boolean) extends Module
 
   val canOut = Wire(Bool())
   canOut := waitToggle && io.downstreamReady
-  io.outValid := canOut
+  io.outValid := waitToggle
 
   def selectRegs(start: Int, end: Int): UInt = {
     val mid = (start + end) / 2
@@ -70,7 +70,7 @@ class ShiftSorter(size: Int, cmpBits: Int, treeSelector: Boolean) extends Module
   }
 
   for (i <- 0 until size) {
-    when (drainCounter === (size - 1).U) {
+    when (canOut && drainCounter === (size - 1).U) {
       regs(i) := 0.U
     }
   }
