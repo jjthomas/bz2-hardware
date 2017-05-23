@@ -107,7 +107,7 @@ object Launcher {
         }
       },
       "SortingNetwork" -> { (backendName: String) =>
-        Driver(() => new SortingNetwork(9, 8, 21), backendName) {
+        Driver(() => new SortingNetwork(3, 8, 21), backendName) {
           (c) => new SortingNetworkTests(c)
         }
       },
@@ -117,7 +117,7 @@ object Launcher {
         }
       },
       "ShiftSorter" -> { (backendName: String) =>
-        Driver(() => new ParallelShiftSorter(512, 8, 21, false), backendName) {
+        Driver(() => new ParallelShiftSorter(128, 8, 21, true, false), backendName) {
           (c) => new ShiftSorterTests(c)
         }
       },
