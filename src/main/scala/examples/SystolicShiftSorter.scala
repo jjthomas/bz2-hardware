@@ -34,74 +34,96 @@ val numEls = size
 
   when (moreSpace && io.blockValid) {
     fillCounter := fillCounter + 1.U
-    regs(0) := io.block
   }
 
   when (!moreSpace && !waitToggle) {
     waitToggle := true.B
   }
 
-  for (i <- 1 until size) {
-    when (moreSpace && io.blockValid) {
-      if (i == size - 1) {
-        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 2)
-        }.otherwise {
-          regs(i) := regs(i - 1)
-        }
-      } else if (i == 1) {
-        when (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i)
-        } .otherwise {
-          regs(i) := regs(i - 1)
-        }
-      } else {
-        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 2)
-        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i)
-        } .otherwise {
-          regs(i) := regs(i - 1)
-        }
-      }
-    }
-  }
-
-  for (i <- 0 until size - 1) {
-    when (canOut) {
-      if (i == size - 2) {
-        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i)
-        }.otherwise {
-          regs(i) := regs(i + 1)
-        }
-      } else if (i == 0) {
+  for (i <- 0 until size) {
+    if (i == 0) {
+      when (moreSpace && io.blockValid) {
+        regs(i) := io.block
+      } .elsewhen (canOut) {
         when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
           regs(i) := regs(i + 2)
         } .otherwise {
           regs(i) := regs(i + 1)
         }
-      } else {
+      } .elsewhen (!moreSpace && !waitToggle) {
         when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i)
-        } .elsewhen (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 2)
-        } .otherwise {
           regs(i) := regs(i + 1)
         }
       }
-    }
-  }
-
-  when (canOut) {
-    regs(size - 1) := ((1 << cmpBits) - 1).U
-  }
-
-  for (i <- 0 until size - 1) {
-    when (!moreSpace && !waitToggle) {
-      when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-        regs(i) := regs(i + 1)
-        regs(i + 1) := regs(i)
+    } else if (i == 1) {
+      when (moreSpace && io.blockValid) {
+        when (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
+          regs(i) := regs(i - 1)
+        }
+      } .elsewhen (canOut) {
+        when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
+          regs(i) := regs(i + 2)
+        } .elsewhen (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
+          regs(i) := regs(i + 1)
+        }
+      } .elsewhen (!moreSpace && !waitToggle) {
+        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i + 1)
+        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 1)
+        }
+      }
+    } else if (i == size - 2) {
+      when (moreSpace && io.blockValid) {
+        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 2)
+        } .elsewhen (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
+          regs(i) := regs(i - 1)
+        }
+      } .elsewhen (canOut) {
+        when (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
+          regs(i) := regs(i + 1)
+        }
+      } .elsewhen (!moreSpace && !waitToggle) {
+        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i + 1)
+        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 1)
+        }
+      }
+    } else if (i == size - 1) {
+      when (moreSpace && io.blockValid) {
+        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 2)
+        }.otherwise {
+          regs(i) := regs(i - 1)
+        }
+      } .elsewhen (canOut) {
+        regs(i) := ((1 << cmpBits) - 1).U
+      } .elsewhen (!moreSpace && !waitToggle) {
+        when (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 1)
+        }
+      }
+    } else {
+      when (moreSpace && io.blockValid) {
+        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 2)
+        } .elsewhen (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
+          regs(i) := regs(i - 1)
+        }
+      } .elsewhen (canOut) {
+        when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
+          regs(i) := regs(i + 2)
+        } .elsewhen (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
+          regs(i) := regs(i + 1)
+        }
+      } .elsewhen (!moreSpace && !waitToggle) {
+        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
+          regs(i) := regs(i + 1)
+        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
+          regs(i) := regs(i - 1)
+        }
       }
     }
   }
