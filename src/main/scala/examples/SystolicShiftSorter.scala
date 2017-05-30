@@ -26,59 +26,68 @@ val numEls = size
   io.thisReady := moreSpace
   io.outValid := !moreSpace
 
+  val right = Wire(Bool())
+  val left = Wire(Bool())
+  right := moreSpace && io.blockValid
+  left := !moreSpace && io.downstreamReady
+
   io.out := regs(0)
 
-  when (moreSpace && io.blockValid) {
+  when (right) {
     fillCounter := fillCounter + 1.U
+  }
+
+  def r(i: Int): UInt = {
+    if (i == -1) io.block(cmpBits - 1, 0) else regs(i)(cmpBits - 1, 0)
   }
 
   for (i <- 0 until size) {
     if (i == 0) {
       regs(i) :=
-        Mux(moreSpace && io.blockValid,
-          Mux(io.block(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0), regs(i), io.block),
-          Mux(!moreSpace && io.downstreamReady,
-            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0), regs(i + 2), regs(i + 1)),
+        Mux(right,
+          Mux(r(-1) > r(i), regs(i), io.block),
+          Mux(left,
+            Mux(r(i + 1) > r(i + 2), regs(i + 2), regs(i + 1)),
             regs(i)))
     } else if (i == 1) {
       regs(i) :=
-        Mux(moreSpace && io.blockValid,
-          Mux(io.block(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0),
+        Mux(right,
+          Mux(r(-1) > r(i - 1),
             io.block,
-            Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i))),
-          Mux(!moreSpace && io.downstreamReady,
-            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0),
+            Mux(r(i - 1) > r(i), regs(i), regs(i - 1))),
+          Mux(left,
+            Mux(r(i + 1) > r(i + 2),
               regs(i + 2),
-              Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i))),
+              Mux(r(i) > r(i + 1), regs(i), regs(i + 1))),
             regs(i)))
     } else if (i == size - 2) {
       regs(i) :=
-        Mux(moreSpace && io.blockValid,
-          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0),
+        Mux(right,
+          Mux(r(i - 2) > r(i - 1),
             regs(i - 2),
-            Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i))),
-          Mux(!moreSpace && io.downstreamReady,
-            Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i)),
+            Mux(r(i - 1) > r(i), regs(i), regs(i - 1))),
+          Mux(left,
+            Mux(r(i) > r(i + 1), regs(i), regs(i + 1)),
             regs(i)))
     } else if (i == size - 1) {
       regs(i) :=
-        Mux(moreSpace && io.blockValid,
-          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0), regs(i - 2), regs(i - 1)),
-          Mux(!moreSpace && io.downstreamReady, ((1 << cmpBits) - 1).U, regs(i)))
+        Mux(right,
+          Mux(r(i - 2) > r(i - 1), regs(i - 2), regs(i - 1)),
+          Mux(left, ((1 << cmpBits) - 1).U, regs(i)))
     } else {
       regs(i) :=
-        Mux(moreSpace && io.blockValid,
-          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0),
+        Mux(right,
+          Mux(r(i - 2) > r(i - 1),
             regs(i - 2),
-            Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i))),
-          Mux(!moreSpace && io.downstreamReady,
-            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0), regs(i + 2),
-              Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i))),
+            Mux(r(i - 1) > r(i), regs(i), regs(i - 1))),
+          Mux(left,
+            Mux(r(i + 1) > r(i + 2), regs(i + 2),
+              Mux(r(i) > r(i + 1), regs(i), regs(i + 1))),
             regs(i)))
     }
   }
 
-  when (!moreSpace && io.downstreamReady) {
+  when (left) {
     when (drainCounter === (size - 1).U) {
       drainCounter := 0.U
       fillCounter := 0.U
