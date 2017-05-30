@@ -42,71 +42,49 @@ val numEls = size
 
   for (i <- 0 until size) {
     if (i == 0) {
-      when (moreSpace && io.blockValid) {
-        regs(i) := io.block
-      } .elsewhen (canOut) {
-        when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 2)
-        } .otherwise {
-          regs(i) := regs(i + 1)
-        }
-      } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 1)
-        }
-      }
+      regs(i) :=
+        Mux(moreSpace && io.blockValid,
+          io.block,
+          Mux(canOut,
+            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0), regs(i + 2), regs(i + 1)),
+            Mux(!moreSpace && !waitToggle,
+              Mux(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0), regs(i + 1), regs(i)),
+              regs(i))))
     } else if (i == 1) {
-      when (moreSpace && io.blockValid) {
-        when (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
-          regs(i) := regs(i - 1)
-        }
-      } .elsewhen (canOut) {
-        when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 2)
-        } .elsewhen (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
-          regs(i) := regs(i + 1)
-        }
-      } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 1)
-        }
-      }
+      regs(i) :=
+        Mux(moreSpace && io.blockValid,
+          Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i)),
+          Mux(canOut,
+            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0),
+              regs(i + 2),
+              Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i))),
+            Mux(!moreSpace && !waitToggle,
+              Mux(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0), regs(i - 1), regs(i)),
+              regs(i))))
     } else if (i == size - 2) {
-      when (moreSpace && io.blockValid) {
-        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 2)
-        } .elsewhen (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
-          regs(i) := regs(i - 1)
-        }
-      } .elsewhen (canOut) {
-        when (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
-          regs(i) := regs(i + 1)
-        }
-      }
+      regs(i) :=
+        Mux(moreSpace && io.blockValid,
+          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0),
+            regs(i - 2),
+            Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i))),
+          Mux(canOut,
+            Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i)),
+            regs(i)))
     } else if (i == size - 1) {
-      when (moreSpace && io.blockValid) {
-        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 2)
-        }.otherwise {
-          regs(i) := regs(i - 1)
-        }
-      } .elsewhen (canOut) {
-        regs(i) := ((1 << cmpBits) - 1).U
-      }
+      regs(i) :=
+        Mux(moreSpace && io.blockValid,
+          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0), regs(i - 2), regs(i - 1)),
+          Mux(canOut, ((1 << cmpBits) - 1).U, regs(i)))
     } else {
-      when (moreSpace && io.blockValid) {
-        when (regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 2)
-        } .elsewhen (!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0))) {
-          regs(i) := regs(i - 1)
-        }
-      } .elsewhen (canOut) {
-        when (regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 2)
-        } .elsewhen (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
-          regs(i) := regs(i + 1)
-        }
-      }
+      regs(i) :=
+        Mux(moreSpace && io.blockValid,
+          Mux(regs(i - 2)(cmpBits - 1, 0) > regs(i - 1)(cmpBits - 1, 0),
+            regs(i - 2),
+            Mux(!(regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)), regs(i - 1), regs(i))),
+          Mux(canOut,
+            Mux(regs(i + 1)(cmpBits - 1, 0) > regs(i + 2)(cmpBits - 1, 0), regs(i + 2),
+              Mux(!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)), regs(i + 1), regs(i))),
+            regs(i)))
     }
   }
 
