@@ -12,7 +12,6 @@ class ShiftSorterTests(c: ParallelShiftSorter) extends PeekPokeTester(c) {
   }
   expect(c.io.thisReady, false)
   poke(c.io.blockValid, false)
-  step(1) // wait cycle
   for (i <- 0 until c.numEls) {
     expect(c.io.outValid, true)
     expect(c.io.out, SorterTestUtils.genField((0 until c.ioElsPub).map(_ => i).toArray))
