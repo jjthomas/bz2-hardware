@@ -67,9 +67,7 @@ val numEls = size
           regs(i) := regs(i + 1)
         }
       } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 1)
-        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
+        when (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
           regs(i) := regs(i - 1)
         }
       }
@@ -84,12 +82,6 @@ val numEls = size
         when (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
           regs(i) := regs(i + 1)
         }
-      } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 1)
-        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 1)
-        }
       }
     } else if (i == size - 1) {
       when (moreSpace && io.blockValid) {
@@ -100,10 +92,6 @@ val numEls = size
         }
       } .elsewhen (canOut) {
         regs(i) := ((1 << cmpBits) - 1).U
-      } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 1)
-        }
       }
     } else {
       when (moreSpace && io.blockValid) {
@@ -117,12 +105,6 @@ val numEls = size
           regs(i) := regs(i + 2)
         } .elsewhen (!(regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0))) {
           regs(i) := regs(i + 1)
-        }
-      } .elsewhen (!moreSpace && !waitToggle) {
-        when (regs(i)(cmpBits - 1, 0) > regs(i + 1)(cmpBits - 1, 0)) {
-          regs(i) := regs(i + 1)
-        } .elsewhen (regs(i - 1)(cmpBits - 1, 0) > regs(i)(cmpBits - 1, 0)) {
-          regs(i) := regs(i - 1)
         }
       }
     }
