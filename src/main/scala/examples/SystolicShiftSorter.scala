@@ -17,7 +17,7 @@ val numEls = size
     val out = Output(UInt(64.W))
   })
 
-  val regs = Reg(init = Vec.do_fill(size) { ((1 << cmpBits) - 1).asUInt(64.W) })
+  val regs = Reg(init = Vec.do_fill(size) { ((1L << cmpBits) - 1).asUInt(64.W) })
   val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
   val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
 
@@ -73,7 +73,7 @@ val numEls = size
       regs(i) :=
         Mux(right,
           Mux(r(i - 2) > r(i - 1), regs(i - 2), regs(i - 1)),
-          Mux(left, ((1 << cmpBits) - 1).U, regs(i)))
+          Mux(left, ((1L << cmpBits) - 1).U, regs(i)))
     } else {
       regs(i) :=
         Mux(right,
