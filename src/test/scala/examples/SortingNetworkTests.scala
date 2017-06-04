@@ -6,7 +6,7 @@ class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
   poke(c.io.downstreamReady, true)
   poke(c.io.blockValid, true)
   for (i <- 0 until c.size by c.ioElsPub) {
-    poke(c.io.block, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray))
+    poke(c.io.block, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray, 64))
     expect(c.io.thisReady, true)
     step(1)
   }
@@ -18,7 +18,7 @@ class SortingNetworkTests(c: SortingNetwork) extends PeekPokeTester(c) {
   }
   for (i <- 0 until c.size by c.ioElsPub) {
     expect(c.io.outValid, true)
-    expect(c.io.out, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray))
+    expect(c.io.out, SorterTestUtils.genField((i + c.ioElsPub - 1 to i by -1).toArray, 64))
     step(1)
   }
   expect(c.io.outValid, false)

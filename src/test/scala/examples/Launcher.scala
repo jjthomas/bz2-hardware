@@ -117,7 +117,7 @@ object Launcher {
         }
       },
       "ShiftSorter" -> { (backendName: String) =>
-        Driver(() => new ParallelShiftSorter(128, 8, 21, true, false), backendName) {
+        Driver(() => new ParallelShiftSorter(512, 10, 51, 2, 34, true, false), backendName) {
           (c) => new ShiftSorterTests(c)
         }
       },
