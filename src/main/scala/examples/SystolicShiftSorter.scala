@@ -5,19 +5,19 @@ import chisel3.core.{Bundle, Module}
 
 // cmpBits sequence of 1's must be an unused max value
 // size must be greater than 2
-class SystolicShiftSorter(size: Int, cmpBits: Int) extends Module { // wordBits: Int
-val numEls = size
+class SystolicShiftSorter(size: Int, wordBits: Int, cmpBits: Int) extends Module {
+  val numEls = size
 
   val io = IO(new Bundle {
     val blockValid = Input(Bool())
-    val block = Input(UInt(64.W))
+    val block = Input(UInt(wordBits.W))
     val downstreamReady = Input(Bool())
     val thisReady = Output(Bool())
     val outValid = Output(Bool())
-    val out = Output(UInt(64.W))
+    val out = Output(UInt(wordBits.W))
   })
 
-  val regs = Reg(init = Vec.do_fill(size) { ((1L << cmpBits) - 1).asUInt(64.W) })
+  val regs = Reg(init = Vec.do_fill(size) { ((1L << cmpBits) - 1).asUInt(wordBits.W) })
   val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
   val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
 
