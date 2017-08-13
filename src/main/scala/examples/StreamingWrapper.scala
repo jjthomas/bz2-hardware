@@ -3,12 +3,64 @@ package examples
 import chisel3._
 import chisel3.core.{Bundle, Module}
 
+class PassThrough extends Module {
+  val io = IO(new Bundle {
+    val inputMemBlock = Input(UInt(512.W))
+    val inputMemBlockValid = Input(Bool())
+    val inputBits = Input(UInt(util.log2Up(512).W))
+    val inputMemConsumed = Output(Bool())
+    val outputMemBlock = Output(UInt(512.W))
+    val outputMemBlockValid = Output(Bool())
+    val outputBits = Output(UInt(util.log2Up(512).W))
+    val outputFinished = Output(Bool())
+    val outputMemFlushed = Input(Bool())
+  })
 
-class StreamingCore extends Module {
+  val inputMemBlock = Reg(UInt(512.W))
+  val inputBitsRemaining = Reg(init = 0.asUInt(util.log2Up(513).W))
+  val outputMemBlock = Reg(UInt(512.W))
+  val outputBits = Reg(init = 0.asUInt(util.log2Up(513).W))
+
 
 }
 
-class StreamingWrapper(numInputChannels: Int, numOutputChannels: Int, numPipes: Int) extends Module {
+class StreamingCore(inputAddrPtr: Long, outputAddrPtr: Long) extends Module {
+  val io = IO(new Bundle {
+    val inputMemAddr = Output(UInt(64.W))
+    val inputMemAddrValid = Output(Bool())
+    val inputMemAddrReady = Input(Bool())
+    val inputMemBlock = Input(UInt(512.W))
+    val inputMemBlockValid = Input(Bool())
+    val inputMemBlockReady = Output(Bool())
+    val outputMemAddr = Output(UInt(64.W))
+    val outputMemAddrValid = Output(Bool())
+    val outputMemAddrReady = Input(Bool())
+    val outputMemBlock = Output(UInt(512.W))
+    val outputMemBlockValid = Output(Bool())
+    val outputMemBlockReady = Input(Bool())
+    val finished = Output(Bool())
+    val init = Input(Bool())
+  })
+
+  val isInit = Reg(init = false.B)
+  val initDone = Reg(init = false.B)
+  val length = Reg(UInt(32.W))
+  val inputMemAddr = Reg(UInt(64.W))
+  val inputMemRequested = Reg(init = false.B)
+  val outputMemAddr = Reg(UInt(64.W))
+  val outputMemFlushed = Reg(init = false.B)
+  when (io.init) {
+    isInit := true.B
+    initDone := false.B
+  }
+  when (isInit) {
+
+  }
+
+}
+
+class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long], numOutputChannels: Int,
+                       outputChannelStartAddrs: Array[Long], numCores: Int) extends Module {
 
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(UInt(64.W), numInputChannels))
@@ -24,57 +76,26 @@ class StreamingWrapper(numInputChannels: Int, numOutputChannels: Int, numPipes: 
     val outputMemBlockValids = Output(Vec(Bool(), numOutputChannels))
     val outputMemBlockReadys = Input(Vec(Bool(), numOutputChannels))
     val init = Input(Bool())
-    // these signals held continuously after init is asserted
-    val inputOffsetAddrs = Input(Vec(UInt(64.W), numInputChannels))
-    val inputStartAddrs = Input(Vec(UInt(64.W), numInputChannels))
-    val outputOffsetAddrs = Input(Vec(UInt(64.W), numOutputChannels))
-    val outputStartAddrs = Input(Vec(UInt(64.W), numOutputChannels))
   })
 
+  val cores = new Array[StreamingCore](numCores)
+  val curInputCore = Reg(UInt(util.log2Up(numCores).W))
+  val curOutputCore = Reg(UInt(util.log2Up(numCores).W))
+  for (i <- 0 until numCores) {
+    val inputChannel = i % numInputChannels
+    val outputChannel = i % numOutputChannels
+    val inputIdx = i / numInputChannels
+    val outputIdx = i / numOutputChannels
+    cores(i) = Module(new StreamingCore(inputChannelStartAddrs(inputChannel) + inputIdx * 8,
+      outputChannelStartAddrs(outputChannel) + outputIdx + 8))
+  }
 
-
-  val isInitStage1 = Reg(init = false.B)
-  val isInitStage2 = Reg(init = false.B)
-  val inputOffsetAddrs = Reg(Vec(UInt(64.W), numInputChannels))
-  val inputOffsetRequested = Reg(init = Vec.do_fill(numInputChannels) { false.B })
-  val inputOffsetBlocks = Reg(Vec(UInt(512.W), numInputChannels))
-  val inputOffsetBlocksValid = Reg(init = Vec.do_fill(numInputChannels) { false.B })
-  val inputAddrs = Reg(Vec(UInt(64.W), numPipes))
-  val inputBlocks = Reg(Vec(UInt(512.W), numPipes))
-  val inputBlocksValid = Reg(init = Vec.do_fill(numPipes) { false.B })
-  val outputOffsetAddrs = Reg(Vec(UInt(64.W), numOutputChannels))
-  val outputOffsetRequested = Reg(init = Vec.do_fill(numOutputChannels) { false.B })
-  val outputOffsetBlocks = Reg(init = Vec.do_fill(numOutputChannels) { 0.asUInt(512.W) })
-  val outputOffsetBlocksValid = Reg(init = Vec.do_fill(numOutputChannels) { false.B })
-  val outputAddrs = Reg(Vec(UInt(64.W), numPipes))
-  val outputBlocks = Reg(Vec(UInt(512.W), numPipes))
-  val outputBlocksValid = Reg(init = Vec.do_fill(numPipes) { false.B })
-  val initDone = Reg(init = false.B)
+  val isInit = Reg(init = false.B)
+  for (i <- 0 until numCores) {
+    cores(i).io.init := io.init
+  }
   when (io.init) {
-    isInitStage1 := true.B
-    isInitStage2 := false.B
-    initDone := false.B
-  }
-  when (isInitStage1) {
-    for (i <- 0 until numInputChannels) {
-      inputOffsetAddrs(i) := io.inputOffsetAddrs(i)
-    }
-    for (i <- 0 until numOutputChannels) {
-      outputOffsetAddrs(i) := io.outputOffsetAddrs(i)
-    }
-    isInitStage1 := false.B
-    isInitStage2 := true.B
-  }
-  when (isInitStage2) {
-    for (i <- 0 until numInputChannels) {
-      when (!inputOffsetBlocksValid(i) && inputOffsetRequested(i) && io.inputMemAddrReadys(i)) {
-        io.inputMemAddrValids(i) := true.B
-        io.inputMemAddrs(i) := inputOffsetAddrs(i)
-        inputOffsetRequested(i) := true.B
-      }
-      when (inputOffsetRequested(i) && io.inputMemBlockValids(i)) {
-        inputOffsetBlocks
-      }
-    }
+    curInputCore := 0.asUInt(util.log2Up(numCores).W)
+    curOutputCore := 0.asUInt(util.log2Up(numCores).W)
   }
 }
