@@ -24,23 +24,25 @@ class PassThrough extends Module {
 
 }
 
+class StreamingCoreIO extends Bundle {
+  val inputMemAddr = Output(UInt(64.W))
+  val inputMemAddrValid = Output(Bool())
+  val inputMemAddrReady = Input(Bool())
+  val inputMemBlock = Input(UInt(512.W))
+  val inputMemBlockValid = Input(Bool())
+  val inputMemBlockReady = Output(Bool())
+  val outputMemAddr = Output(UInt(64.W))
+  val outputMemAddrValid = Output(Bool())
+  val outputMemAddrReady = Input(Bool())
+  val outputMemBlock = Output(UInt(512.W))
+  val outputMemBlockValid = Output(Bool())
+  val outputMemBlockReady = Input(Bool())
+  val finished = Output(Bool())
+  val init = Input(Bool())
+}
+
 class StreamingCore(inputAddrPtr: Long, outputAddrPtr: Long) extends Module {
-  val io = IO(new Bundle {
-    val inputMemAddr = Output(UInt(64.W))
-    val inputMemAddrValid = Output(Bool())
-    val inputMemAddrReady = Input(Bool())
-    val inputMemBlock = Input(UInt(512.W))
-    val inputMemBlockValid = Input(Bool())
-    val inputMemBlockReady = Output(Bool())
-    val outputMemAddr = Output(UInt(64.W))
-    val outputMemAddrValid = Output(Bool())
-    val outputMemAddrReady = Input(Bool())
-    val outputMemBlock = Output(UInt(512.W))
-    val outputMemBlockValid = Output(Bool())
-    val outputMemBlockReady = Input(Bool())
-    val finished = Output(Bool())
-    val init = Input(Bool())
-  })
+  val io = IO(new StreamingCoreIO)
 
   val isInit = Reg(init = false.B)
   val initDone = Reg(init = false.B)
@@ -61,7 +63,6 @@ class StreamingCore(inputAddrPtr: Long, outputAddrPtr: Long) extends Module {
 
 class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long], numOutputChannels: Int,
                        outputChannelStartAddrs: Array[Long], numCores: Int) extends Module {
-
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(UInt(64.W), numInputChannels))
     val inputMemAddrValids = Output(Vec(Bool(), numInputChannels))
@@ -78,24 +79,43 @@ class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long
     val init = Input(Bool())
   })
 
-  val cores = new Array[StreamingCore](numCores)
-  val curInputCore = Reg(UInt(util.log2Up(numCores).W))
-  val curOutputCore = Reg(UInt(util.log2Up(numCores).W))
+  val _cores = new Array[StreamingCore](numCores)
+  val cores = Vec.do_fill(numCores) { new StreamingCoreIO }
+  val curInputCore = new Array[UInt](numInputChannels)
+  val curOutputCore = new Array[UInt](numOutputChannels)
   for (i <- 0 until numCores) {
     val inputChannel = i % numInputChannels
     val outputChannel = i % numOutputChannels
     val inputIdx = i / numInputChannels
     val outputIdx = i / numOutputChannels
-    cores(i) = Module(new StreamingCore(inputChannelStartAddrs(inputChannel) + inputIdx * 8,
+    _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(inputChannel) + inputIdx * 8,
       outputChannelStartAddrs(outputChannel) + outputIdx + 8))
+    cores(i) <> _cores(i).io
+  }
+  def numCoresForChannel(numChannels: Int, channel: Int): Int = {
+    (numCores - 1 - channel) / numChannels + 1
+  }
+  for (i <- 0 until numInputChannels) {
+    curInputCore(i) = Reg(UInt(util.log2Up(numCoresForChannel(numInputChannels, i)).W))
+  }
+  for (i <- 0 until numOutputChannels) {
+    curOutputCore(i) = Reg(UInt(util.log2Up(numCoresForChannel(numOutputChannels, i)).W))
   }
 
   val isInit = Reg(init = false.B)
   for (i <- 0 until numCores) {
-    cores(i).io.init := io.init
+    cores(i).init := io.init
   }
   when (io.init) {
-    curInputCore := 0.asUInt(util.log2Up(numCores).W)
-    curOutputCore := 0.asUInt(util.log2Up(numCores).W)
+    for (i <- 0 until numInputChannels) {
+      curInputCore(i) := 0.asUInt(util.log2Up(numCoresForChannel(numInputChannels, i)).W)
+    }
+    for (i <- 0 until numOutputChannels) {
+      curOutputCore(i) := 0.asUInt(util.log2Up(numCoresForChannel(numOutputChannels, i)).W)
+    }
+  }
+  for (i <- 0 until numInputChannels) {
+    io.inputMemAddrs(i) := cores(i).inputMemAddr
+
   }
 }
