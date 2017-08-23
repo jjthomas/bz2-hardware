@@ -20,11 +20,42 @@ class PassThrough extends Module {
   })
 
   val inputMemBlock = Reg(UInt(512.W))
-  val inputBitsRemaining = Reg(init = 0.asUInt(util.log2Up(513).W))
+  val inputBitsRemaining = Reg(UInt(util.log2Up(513).W))
+  val inputFinished = Reg(init = false.B)
+  when (io.inputMemBlockValid) {
+    inputFinished := io.inputBits === 0.U
+    inputBitsRemaining := io.inputBits
+  }
+  io.inputMemConsumed := inputBitsRemaining === 0.U && !inputFinished
+
   val outputMemBlock = Reg(UInt(512.W))
   val outputBits = Reg(init = 0.asUInt(util.log2Up(513).W))
-
-
+  val nextBitValid = Wire(Bool())
+  val nextBit = Wire(Bool())
+  val inputAdvance = Wire(Bool())
+  inputAdvance := outputBits =/= 512.U && inputBitsRemaining =/= 0.U
+  when (inputAdvance) {
+    inputBitsRemaining := inputBitsRemaining - 1.U
+    for (i <- 0 until 511) {
+      inputMemBlock(i) := inputMemBlock(i + 1)
+    }
+  }
+  nextBitValid := inputAdvance
+  nextBit := inputMemBlock(0)
+  when (nextBitValid) {
+    outputMemBlock(0) := nextBit
+    for (i <- 1 until 512) {
+      outputMemBlock(i) := outputMemBlock(i - 1)
+    }
+    outputBits := outputBits + 1.U
+  }
+  io.outputMemBlockValid := outputBits === 512.U || (inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U)
+  io.outputMemBlock := outputMemBlock
+  io.outputBits := outputBits
+  io.outputFinished := inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
+  when (io.outputMemFlushed) {
+    outputBits := 0.U
+  }
 }
 
 class StreamingCoreIO extends Bundle {
@@ -115,8 +146,8 @@ class StreamingCore(metadataPtr: Long) extends Module {
   io.outputFinished := outputLengthCommitted
 }
 
-class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long], numOutputChannels: Int,
-                       outputChannelStartAddrs: Array[Long], numCores: Int) extends Module {
+class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
+                       val outputChannelStartAddrs: Array[Long], numCores: Int) extends Module {
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(UInt(64.W), numInputChannels))
     val inputMemAddrValids = Output(Vec(Bool(), numInputChannels))
@@ -131,6 +162,7 @@ class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long
     val outputMemBlockValids = Output(Vec(Bool(), numOutputChannels))
     val outputMemBlockReadys = Input(Vec(Bool(), numOutputChannels))
     val init = Input(Bool())
+    val finished = Output(Bool())
   })
 
   val _cores = new Array[StreamingCore](numCores)
@@ -139,6 +171,7 @@ class StreamingWrapper(numInputChannels: Int, inputChannelStartAddrs: Array[Long
   val cores = Vec.do_fill(numCores) { new StreamingCoreIO }
   val curInputCore = new Array[UInt](numInputChannels)
   val curOutputCore = new Array[UInt](numOutputChannels)
+  io.finished := cores.reduceLeft((a: Bool, b: StreamingCoreIO) => a && b.outputFinished)
 
   def numCoresForChannel(numChannels: Int, channel: Int): Int = {
     (numCores - 1 - channel) / numChannels + 1
