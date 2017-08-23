@@ -73,7 +73,6 @@ class StreamingCoreIO extends Bundle {
   val outputMemBlockReady = Input(Bool())
   val inputFinished = Output(Bool())
   val outputFinished = Output(Bool())
-  val init = Input(Bool())
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
@@ -81,7 +80,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
   val io = IO(new StreamingCoreIO)
   val core = Module(new PassThrough)
 
-  val isInit = Reg(init = false.B)
+  val isInit = Reg(init = true.B)
   val initDone = Reg(init = false.B)
   val inputBitsRemaining = Reg(UInt(64.W))
   val outputBits = Reg(init = 0.asUInt(64.W))
@@ -90,10 +89,6 @@ class StreamingCore(metadataPtr: Long) extends Module {
   val outputMemAddr = Reg(UInt(64.W))
   val outputLenAddr = Reg(UInt(64.W))
   val outputMemFlushed = Reg(init = false.B)
-
-  when (io.init) {
-    isInit := true.B
-  }
 
   val inputAddressAccepted = Reg(init = false.B)
   io.inputMemAddr := inputMemAddr
@@ -161,7 +156,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val outputMemBlocks = Output(Vec(UInt(512.W), numOutputChannels))
     val outputMemBlockValids = Output(Vec(Bool(), numOutputChannels))
     val outputMemBlockReadys = Input(Vec(Bool(), numOutputChannels))
-    val init = Input(Bool())
     val finished = Output(Bool())
   })
 
@@ -208,10 +202,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     curOutputCore(i) = Reg(init = outputChannelBounds(i).asUInt(util.log2Up(numCores).W))
   }
 
-  val isInit = Reg(init = false.B)
-  for (i <- 0 until numCores) {
-    cores(i).init := io.init
-  }
   for (i <- 0 until numInputChannels) {
     io.inputMemAddrs(i) := cores(curInputCore(i)).inputMemAddr
     io.inputMemAddrValids(i) := cores(curInputCore(i)).inputMemAddrValid
