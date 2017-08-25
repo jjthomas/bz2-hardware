@@ -112,13 +112,18 @@ object Launcher {
         }
       },
       "ShiftSorter" -> { (backendName: String) =>
-        Driver(() => new ParallelShiftSorter(512, 10, 51, 2, 34, true, false), backendName) {
+        Driver(() => new ParallelShiftSorter(512, 8, 64, 0, 40, true, false), backendName) {
           (c) => new ShiftSorterTests(c)
         }
       },
       "InsertionSorter" -> { (backendName: String) =>
         Driver(() => new InsertionSorter(32, 21), backendName) {
           (c) => new InsertionSorterTests(c)
+        }
+      },
+      "StreamingWrapper" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(1, Array(0), 1, Array(0), 1), backendName) {
+          (c) => new StreamingWrapperTests(c, 1)
         }
       }
   )
