@@ -7,9 +7,10 @@ class PassThrough extends Module {
   val io = IO(new Bundle {
     val inputMemBlock = Input(UInt(512.W))
     val inputMemBlockValid = Input(Bool())
-    // 0 when we are done
     val inputBits = Input(UInt(util.log2Up(513).W))
     val inputMemConsumed = Output(Bool())
+    // continuously asserted at least one cycle after inputMemConsumed emitted for final block
+    val inputFinished = Input(Bool())
     val outputMemBlock = Output(UInt(512.W))
     // must hold valid until we received flushed signal
     val outputMemBlockValid = Output(Bool())
@@ -21,15 +22,13 @@ class PassThrough extends Module {
 
   val inputMemBlock = Reg(Vec(512, Bool()))
   val inputBitsRemaining = Reg(init = 0.asUInt(util.log2Up(513).W))
-  val inputFinished = Reg(init = false.B)
   when (io.inputMemBlockValid) {
-    inputFinished := io.inputBits === 0.U
     inputBitsRemaining := io.inputBits
     for (i <- 0 until 512) {
       inputMemBlock(i) := io.inputMemBlock(i)
     }
   }
-  io.inputMemConsumed := inputBitsRemaining === 0.U && !inputFinished
+  io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
 
   val outputMemBlock = Reg(Vec(512, Bool()))
   val outputBits = Reg(init = 0.asUInt(util.log2Up(513).W))
@@ -54,10 +53,10 @@ class PassThrough extends Module {
     }
     outputBits := outputBits + 1.U
   }
-  io.outputMemBlockValid := outputBits === 512.U || (inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U)
+  io.outputMemBlockValid := outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U)
   io.outputMemBlock := outputMemBlock.asUInt
   io.outputBits := outputBits
-  io.outputFinished := inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
+  io.outputFinished := io.inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
   when (io.outputMemFlushed) {
     outputBits := 0.U
   }
@@ -88,6 +87,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
   val isInit = Reg(init = true.B)
   val initDone = Reg(init = false.B)
   val inputBitsRemaining = Reg(init = 1.asUInt(64.W)) // init nonzero so that inputFinished isn't immediately asserted
+  val coreInputFinished = Reg(init = false.B)
   val outputBits = Reg(init = 0.asUInt(64.W))
   val outputLengthCommitted = Reg(init = false.B)
   val inputMemAddr = Reg(init = metadataPtr.asUInt(64.W))
@@ -123,6 +123,10 @@ class StreamingCore(metadataPtr: Long) extends Module {
     inputAddressAccepted := false.B
   }
   io.inputFinished := inputBitsRemaining === 0.U
+  when (core.io.inputMemConsumed && inputBitsRemaining === 0.U) {
+    coreInputFinished := true.B
+  }
+  core.io.inputFinished := coreInputFinished
 
   val outputAddressAccepted = Reg(init = false.B)
   io.outputMemAddr := Mux(core.io.outputFinished, outputLenAddr, outputMemAddr)
@@ -141,6 +145,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
       outputLengthCommitted := true.B
     } .otherwise {
       outputBits := outputBits + core.io.outputBits
+      outputMemAddr := outputMemAddr + 64.U
     }
   }
   io.outputFinished := outputLengthCommitted
