@@ -167,8 +167,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val curOutputCore = new Array[UInt](numOutputChannels)
   io.finished := cores.reduceLeft((a: Bool, b: StreamingCoreIO) => a && b.outputFinished)
 
-  def numCoresForChannel(numChannels: Int, channel: Int): Int = {
-    (numCores - 1 - channel) / numChannels + 1
+  def numCoresForInputChannel(channel: Int): Int = {
+    (numCores - 1 - channel) / numInputChannels + 1
+  }
+  def numCoresForOutputChannel(channel: Int): Int = {
+    (numCores - 1 - channel) / numOutputChannels + 1
   }
   // TODO we should pass in these bounds as arguments so there is a well-defined mapping from
   // input to output streams that doesn't depend on the details of the below code
@@ -177,10 +180,10 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   inputChannelBounds(0) = 0
   outputChannelBounds(0) = 0
   for (i <- 0 until numInputChannels) {
-    inputChannelBounds(i + 1) = inputChannelBounds(i) + numCoresForChannel(numInputChannels, i)
+    inputChannelBounds(i + 1) = inputChannelBounds(i) + numCoresForInputChannel(i)
   }
   for (i <- 0 until numOutputChannels) {
-    outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForChannel(numOutputChannels, i)
+    outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForOutputChannel(i)
   }
   var curInputChannel = 0
   var curOutputChannel = 0
