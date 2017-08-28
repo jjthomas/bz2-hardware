@@ -121,6 +121,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
       inputMemAddr := inputMemAddr + 64.U
     }
     inputAddressAccepted := false.B
+    printf(p"core ${metadataPtr / 64} read input\n")
   }
   io.inputFinished := inputBitsRemaining === 0.U
   when (core.io.inputMemConsumed && inputBitsRemaining === 0.U) {
@@ -147,6 +148,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
       outputBits := outputBits + core.io.outputBits
       outputMemAddr := outputMemAddr + 64.U
     }
+    printf(p"core ${metadataPtr / 64} emitted output\n")
   }
   io.outputFinished := outputLengthCommitted
 }
@@ -227,6 +229,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       cores(curInputCore(i)).inputMemBlockValid)) {
       curInputCore(i) := Mux(curInputCore(i) === (inputChannelBounds(i + 1) - 1).U, inputChannelBounds(i).U,
         curInputCore(i) + 1.U)
+      printf(p"advancing input count: ${curInputCore(i)}\n")
     }
   }
   for (i <- 0 until numOutputChannels) {
@@ -243,6 +246,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       cores(curOutputCore(i)).outputMemBlockValid)) {
       curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) - 1).U, outputChannelBounds(i).U,
         curOutputCore(i) + 1.U)
+      printf(p"advancing output count: ${curOutputCore(i)}\n")
     }
   }
   var cumFinished = cores(0).outputFinished
