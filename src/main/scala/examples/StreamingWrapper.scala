@@ -216,9 +216,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   for (i <- 0 until numInputChannels) {
     io.inputMemAddrs(i) := cores(curInputCore(i)).inputMemAddr
     io.inputMemAddrValids(i) := cores(curInputCore(i)).inputMemAddrValid
-    cores(curInputCore(i)).inputMemAddrReady := io.inputMemAddrReadys(i)
-    cores(curInputCore(i)).inputMemBlock := io.inputMemBlocks(i)
-    cores(curInputCore(i)).inputMemBlockValid := io.inputMemBlockValids(i)
+    for (j <- inputChannelBounds(i) until inputChannelBounds(i + 1)) {
+      cores(j).inputMemAddrReady := Mux(curInputCore(i) === j.U, io.inputMemAddrReadys(i), false.B)
+      cores(j).inputMemBlock := Mux(curInputCore(i) === j.U, io.inputMemBlocks(i), 0.U)
+      cores(j).inputMemBlockValid := Mux(curInputCore(i) === j.U, io.inputMemBlockValids(i), false.B)
+    }
     io.inputMemBlockReadys(i) := cores(curInputCore(i)).inputMemBlockReady
 
     when (cores(curInputCore(i)).inputFinished || (cores(curInputCore(i)).inputMemBlockReady &&
@@ -230,10 +232,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   for (i <- 0 until numOutputChannels) {
     io.outputMemAddrs(i) := cores(curOutputCore(i)).outputMemAddr
     io.outputMemAddrValids(i) := cores(curOutputCore(i)).outputMemAddrValid
-    cores(curOutputCore(i)).outputMemAddrReady := io.outputMemAddrReadys(i)
     io.outputMemBlocks(i) := cores(curOutputCore(i)).outputMemBlock
     io.outputMemBlockValids(i) := cores(curOutputCore(i)).outputMemBlockValid
-    cores(curOutputCore(i)).outputMemBlockReady := io.outputMemBlockReadys(i)
+    for (j <- outputChannelBounds(i) until outputChannelBounds(i + 1)) {
+      cores(j).outputMemAddrReady := Mux(curOutputCore(i) === j.U, io.outputMemAddrReadys(i), false.B)
+      cores(j).outputMemBlockReady := Mux(curOutputCore(i) === j.U, io.outputMemBlockReadys(i), false.B)
+    }
 
     when (cores(curOutputCore(i)).outputFinished || (cores(curOutputCore(i)).outputMemBlockReady &&
       cores(curOutputCore(i)).outputMemBlockValid)) {
