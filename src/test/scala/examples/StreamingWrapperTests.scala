@@ -64,7 +64,6 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           assert((curAddr - c.inputChannelStartAddrs(i)) % 64 == 0)
           val inputCore = (curAddr - c.inputChannelStartAddrs(i)) / 64
           assert(perCoreInputCounters(i)(inputCore) == 0)
-          println("metadata read for core " + inputCore)
           val (outputChannel, outputCore) = getOutputLocForInputLoc(i, inputCore)
           val outputAddr = c.outputChannelStartAddrs(outputChannel) +
             64 * (linesPerChunk + 1) * outputCore
@@ -76,7 +75,6 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           perCoreInputCounters(i)(inputCore) += 1
         } else {
           val offset = curAddr - (c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i))
-          println("offset: " + offset)
           assert(offset < linesPerChunk * 64 * c.numCoresForInputChannel(i))
           assert(offset % 64 == 0)
           val inputCore = offset / (linesPerChunk * 64)
@@ -112,8 +110,6 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           assert(peek(c.io.outputMemBlocks(i)).toInt == linesPerChunk * 64 * 8)
         } else {
           val (_, inputCore) = getInputLocForOutputLoc(i, outputCore)
-          println("inputCore: " + inputCore + ", outputCore: " + outputCore)
-          println("outputMemBlock: " + peek(c.io.outputMemBlocks(i)).toInt)
           assert(peek(c.io.outputMemBlocks(i)).toInt == inputCore + outputElement - 1)
         }
         step(1)
