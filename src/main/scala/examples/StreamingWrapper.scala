@@ -80,7 +80,7 @@ class StreamingCoreIO extends Bundle {
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
-class StreamingCore(metadataPtr: Long) extends Module {
+class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   val io = IO(new StreamingCoreIO)
   val core = Module(new PassThrough)
 
@@ -100,6 +100,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
   io.inputMemAddrValid := !inputAddressAccepted && (isInit || (initDone && core.io.inputMemConsumed &&
     !(inputBitsRemaining === 0.U)))
   when (io.inputMemAddrValid && io.inputMemAddrReady) {
+    printf(p"input address 0x${Hexadecimal(io.inputMemAddr)} accepted for core $coreId\n")
     inputAddressAccepted := true.B
   }
   io.inputMemBlockReady := inputAddressAccepted
@@ -109,6 +110,7 @@ class StreamingCore(metadataPtr: Long) extends Module {
   core.io.inputMemBlockValid := inputBlockReadable && initDone
   core.io.inputBits := Mux(inputBitsRemaining > 512.U, 512.U, inputBitsRemaining(util.log2Up(513) - 1, 0))
   when (inputBlockReadable) {
+    printf(p"input block 0x${Hexadecimal(io.inputMemBlock)} at address 0x${Hexadecimal(io.inputMemAddr)} accepted for core $coreId\n")
     when (isInit) {
       inputMemAddr := io.inputMemBlock(63, 0)
       inputBitsRemaining := io.inputMemBlock(127, 64)
@@ -133,12 +135,14 @@ class StreamingCore(metadataPtr: Long) extends Module {
   io.outputMemAddrValid := !outputAddressAccepted && (core.io.outputMemBlockValid ||
     (core.io.outputFinished && !outputLengthCommitted))
   when (io.outputMemAddrValid && io.outputMemAddrReady) {
+    printf(p"output address 0x${Hexadecimal(io.outputMemAddr)} accepted for core $coreId\n")
     outputAddressAccepted := true.B
   }
   io.outputMemBlock := Mux(core.io.outputFinished, outputBits, core.io.outputMemBlock)
   io.outputMemBlockValid := outputAddressAccepted
   core.io.outputMemFlushed := outputAddressAccepted && io.outputMemBlockReady
   when (outputAddressAccepted && io.outputMemBlockReady) {
+    printf(p"output block 0x${Hexadecimal(io.outputMemBlock)} at address 0x${Hexadecimal(io.outputMemAddr)} accepted for core $coreId\n")
     outputAddressAccepted := false.B
     // TODO make sure outputFinished can't be set until a cycle after outputMemFlushed is asserted
     when (core.io.outputFinished) {
@@ -201,7 +205,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       curOutputChannel += 1
     }
     _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * 64))
+      (i - inputChannelBounds(curInputChannel)) * 64, i))
   }
   // TODO may want to divide this into channel groups so that we don't have to do the random access
   // across all cores
@@ -250,4 +254,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     cumFinished = cumFinished && cores(i).outputFinished
   }
   io.finished := cumFinished
+}
+
+object StreamingWrapperDriver extends App {
+  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 50))
 }
