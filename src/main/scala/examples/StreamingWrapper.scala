@@ -21,7 +21,7 @@ class PassThrough extends Module {
   })
 
   val inputMemBlock = Reg(Vec(512, Bool()))
-  val inputBitsRemaining = Reg(init = 0.asUInt(util.log2Up(513).W))
+  val inputBitsRemaining = RegInit(0.asUInt(util.log2Up(513).W))
   when (io.inputMemBlockValid) {
     inputBitsRemaining := io.inputBits
     for (i <- 0 until 512) {
@@ -31,7 +31,7 @@ class PassThrough extends Module {
   io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
 
   val outputMemBlock = Reg(Vec(512, Bool()))
-  val outputBits = Reg(init = 0.asUInt(util.log2Up(513).W))
+  val outputBits = RegInit(0.asUInt(util.log2Up(513).W))
   val nextBitValid = Wire(Bool())
   val nextBit = Wire(Bool())
   val inputAdvance = Wire(Bool())
@@ -84,18 +84,18 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   val io = IO(new StreamingCoreIO)
   val core = Module(new PassThrough)
 
-  val isInit = Reg(init = true.B)
-  val initDone = Reg(init = false.B)
-  val inputBitsRemaining = Reg(init = 1.asUInt(64.W)) // init nonzero so that inputFinished isn't immediately asserted
-  val coreInputFinished = Reg(init = false.B)
-  val outputBits = Reg(init = 0.asUInt(64.W))
-  val outputLengthCommitted = Reg(init = false.B)
-  val inputMemAddr = Reg(init = metadataPtr.asUInt(64.W))
+  val isInit = RegInit(true.B)
+  val initDone = RegInit(false.B)
+  val inputBitsRemaining = RegInit(1.asUInt(64.W)) // init nonzero so that inputFinished isn't immediately asserted
+  val coreInputFinished = RegInit(false.B)
+  val outputBits = RegInit(0.asUInt(64.W))
+  val outputLengthCommitted = RegInit(false.B)
+  val inputMemAddr = RegInit(metadataPtr.asUInt(64.W))
   val outputMemAddr = Reg(UInt(64.W))
   val outputLenAddr = Reg(UInt(64.W))
-  val outputMemFlushed = Reg(init = false.B)
+  val outputMemFlushed = RegInit(false.B)
 
-  val inputAddressAccepted = Reg(init = false.B)
+  val inputAddressAccepted = RegInit(false.B)
   io.inputMemAddr := inputMemAddr
   io.inputMemAddrValid := !inputAddressAccepted && (isInit || (initDone && core.io.inputMemConsumed &&
     !(inputBitsRemaining === 0.U)))
@@ -130,7 +130,7 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   }
   core.io.inputFinished := coreInputFinished
 
-  val outputAddressAccepted = Reg(init = false.B)
+  val outputAddressAccepted = RegInit(false.B)
   io.outputMemAddr := Mux(core.io.outputFinished, outputLenAddr, outputMemAddr)
   io.outputMemAddrValid := !outputAddressAccepted && (core.io.outputMemBlockValid ||
     (core.io.outputFinished && !outputLengthCommitted))
@@ -209,12 +209,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   }
   // TODO may want to divide this into channel groups so that we don't have to do the random access
   // across all cores
-  val cores = Vec(_cores.map(_.io))
+  val cores = VecInit(_cores.map(_.io))
   for (i <- 0 until numInputChannels) {
-    curInputCore(i) = Reg(init = inputChannelBounds(i).asUInt(util.log2Up(Math.max(numCores, 2)).W))
+    curInputCore(i) = RegInit(inputChannelBounds(i).asUInt(util.log2Up(Math.max(numCores, 2)).W))
   }
   for (i <- 0 until numOutputChannels) {
-    curOutputCore(i) = Reg(init = outputChannelBounds(i).asUInt(util.log2Up(Math.max(numCores, 2)).W))
+    curOutputCore(i) = RegInit(outputChannelBounds(i).asUInt(util.log2Up(Math.max(numCores, 2)).W))
   }
 
   for (i <- 0 until numInputChannels) {
@@ -257,5 +257,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 }
 
 object StreamingWrapperDriver extends App {
-  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 50))
+  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 100))
 }

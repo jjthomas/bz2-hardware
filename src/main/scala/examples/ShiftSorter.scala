@@ -18,10 +18,10 @@ class ShiftSorter(size: Int, cmpBits: Int, treeSelector: Boolean) extends Module
     val out = Output(UInt(64.W))
   })
 
-  val regs = Reg(init = Vec.do_fill(size) { 0.asUInt(64.W) })
-  val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
-  val waitToggle = Reg(init = false.B)
-  val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
+  val regs = RegInit(VecInit((0 until size).map(_ => 0.asUInt(64.W))))
+  val fillCounter = RegInit(0.asUInt(util.log2Up(size + 1).W))
+  val waitToggle = RegInit(false.B)
+  val drainCounter = RegInit(0.asUInt(util.log2Up(size).W))
 
   val moreSpace = Wire(Bool())
   moreSpace := fillCounter < size.U

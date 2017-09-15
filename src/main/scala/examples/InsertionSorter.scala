@@ -16,9 +16,9 @@ val numEls = size
     val out = Output(UInt(64.W))
   })
 
-  val regs = Reg(init = Vec.do_fill(size) { ((1 << cmpBits) - 1).asUInt(64.W) })
-  val fillCounter = Reg(init = 0.asUInt(util.log2Up(size + 1).W))
-  val drainCounter = Reg(init = 0.asUInt(util.log2Up(size).W))
+  val regs = RegInit(VecInit((0 until size).map(_ => ((1 << cmpBits) - 1).asUInt(64.W))))
+  val fillCounter = RegInit(0.asUInt(util.log2Up(size + 1).W))
+  val drainCounter = RegInit(0.asUInt(util.log2Up(size).W))
 
   val moreSpace = Wire(Bool())
   moreSpace := fillCounter < size.U
