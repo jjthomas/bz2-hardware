@@ -223,7 +223,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     io.inputMemBlockReadys(i) := cores(curInputCore(i)).inputMemBlockReady
     for (j <- inputChannelBounds(i) until inputChannelBounds(i + 1)) {
       cores(j).inputMemAddrReady := Mux(curInputCore(i) === j.U, io.inputMemAddrReadys(i), false.B)
-      cores(j).inputMemBlock := Mux(curInputCore(i) === j.U, io.inputMemBlocks(i), 0.U)
+      cores(j).inputMemBlock := io.inputMemBlocks(i)
       cores(j).inputMemBlockValid := Mux(curInputCore(i) === j.U, io.inputMemBlockValids(i), false.B)
     }
 
