@@ -5,55 +5,56 @@ import chisel3.core.{Reg, Bundle, Module}
 
 class PassThrough extends Module {
   val io = IO(new Bundle {
-    val inputMemBlock = Input(UInt(512.W))
+    val inputMemBlock = Input(UInt(64.W))
     val inputMemBlockValid = Input(Bool())
-    val inputBits = Input(UInt(util.log2Up(513).W))
+    val inputBits = Input(UInt(util.log2Up(65).W))
     val inputMemConsumed = Output(Bool())
     // continuously asserted at least one cycle after inputMemConsumed emitted for final block
     val inputFinished = Input(Bool())
-    val outputMemBlock = Output(UInt(512.W))
+    val outputMemBlock = Output(UInt(64.W))
     // must hold valid until we received flushed signal
     val outputMemBlockValid = Output(Bool())
-    val outputBits = Output(UInt(util.log2Up(513).W))
+    val outputBits = Output(UInt(util.log2Up(65).W))
     // hold continuously starting at some point (at least one cycle) after flush of final output
     val outputFinished = Output(Bool())
     val outputMemFlushed = Input(Bool())
   })
 
-  val inputMemBlock = Reg(Vec(512, Bool()))
-  val inputBitsRemaining = RegInit(0.asUInt(util.log2Up(513).W))
+  val inputMemBlock = Reg(Vec(64, Bool()))
+  val inputBitsRemaining = RegInit(0.asUInt(util.log2Up(65).W))
+  val outputMemBlock = Reg(Vec(64, Bool()))
+  val outputBits = RegInit(0.asUInt(util.log2Up(65).W))
+
+  val inputAdvance = Wire(Bool())
+  inputAdvance := outputBits =/= 64.U && inputBitsRemaining =/= 0.U
   when (io.inputMemBlockValid) {
     inputBitsRemaining := io.inputBits
-    for (i <- 0 until 512) {
+    for (i <- 0 until 64) {
       inputMemBlock(i) := io.inputMemBlock(i)
     }
-  }
-  io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
-
-  val outputMemBlock = Reg(Vec(512, Bool()))
-  val outputBits = RegInit(0.asUInt(util.log2Up(513).W))
-  val nextBitValid = Wire(Bool())
-  val nextBit = Wire(Bool())
-  val inputAdvance = Wire(Bool())
-  inputAdvance := outputBits =/= 512.U && inputBitsRemaining =/= 0.U
-  when (inputAdvance) {
+  } .elsewhen (inputAdvance) {
     inputBitsRemaining := inputBitsRemaining - 1.U
-    for (i <- 0 until 511) {
+    for (i <- 0 until 63) {
       inputMemBlock(i) := inputMemBlock(i + 1)
     }
   }
+
+  val nextBitValid = Wire(Bool())
+  val nextBit = Wire(Bool())
   nextBitValid := inputAdvance
   nextBit := inputMemBlock(0)
   when (nextBitValid) {
-    outputMemBlock(511) := nextBit
-    for (i <- 0 until 511) {
+    outputMemBlock(63) := nextBit
+    for (i <- 0 until 63) {
       // important: this means that in a final, partial output block the valid bits will be stored in the upper bits
       // of the block
       outputMemBlock(i) := outputMemBlock(i + 1)
     }
     outputBits := outputBits + 1.U
   }
-  io.outputMemBlockValid := outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U)
+
+  io.inputMemConsumed := inputBitsRemaining === 0.U
+  io.outputMemBlockValid := outputBits === 64.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U)
   io.outputMemBlock := outputMemBlock.asUInt
   io.outputBits := outputBits
   io.outputFinished := io.inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
@@ -82,13 +83,17 @@ class StreamingCoreIO extends Bundle {
 // TODO current limitation: all addresses must be 512-bit aligned
 class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   val io = IO(new StreamingCoreIO)
-  val core = Module(new PassThrough)
+  val cores = new Array[PassThrough](8)
+  for (i <- 0 until 8) {
+    cores(i) = Module(new PassThrough)
+  }
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
-  val inputBitsRemaining = RegInit(1.asUInt(64.W)) // init nonzero so that inputFinished isn't immediately asserted
-  val coreInputFinished = RegInit(false.B)
-  val outputBits = RegInit(0.asUInt(64.W))
+  // init nonzero so that inputFinished isn't immediately asserted
+  val inputBitsRemainingPerCore = RegInit(VecInit((0 until 8).map(_ => 1.asUInt(64.W))))
+  val inputFinishedPerCore = RegInit(VecInit((0 until 8).map(_ => false.B)))
+  val outputBitsPerCore = RegInit(VecInit((0 until 8).map(_ => 0.asUInt(64.W))))
   val outputLengthCommitted = RegInit(false.B)
   val inputMemAddr = RegInit(metadataPtr.asUInt(64.W))
   val outputMemAddr = Reg(UInt(64.W))
@@ -97,34 +102,55 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
 
   val inputAddressAccepted = RegInit(false.B)
   io.inputMemAddr := inputMemAddr
-  io.inputMemAddrValid := !inputAddressAccepted && (isInit || (initDone && core.io.inputMemConsumed &&
-    !(inputBitsRemaining === 0.U)))
+  var allCoresMemConsumed = cores(0).io.inputMemConsumed
+  for (i <- 1 until 8) {
+    allCoresMemConsumed = allCoresMemConsumed && cores(i).io.inputMemConsumed
+  }
+  // TODO we can probably eliminate someCoresBitsRemaining computation if we modify StreamingWrapper a bit
+  var someCoresBitsRemaining = inputBitsRemainingPerCore(0) =/= 0.U
+  for (i <- 1 until 8) {
+    someCoresBitsRemaining = someCoresBitsRemaining || (inputBitsRemainingPerCore(i) =/= 0.U)
+  }
+  // the 8 cores advance through memory blocks in lockstep
+  io.inputMemAddrValid := !inputAddressAccepted && (isInit || (initDone && allCoresMemConsumed &&
+    someCoresBitsRemaining))
   when (io.inputMemAddrValid && io.inputMemAddrReady) {
     printf(p"input address 0x${Hexadecimal(io.inputMemAddr)} accepted for core $coreId\n")
     inputAddressAccepted := true.B
   }
   io.inputMemBlockReady := inputAddressAccepted
-  core.io.inputMemBlock := io.inputMemBlock
+  for (i <- 0 until 8) {
+    cores(i).io.inputMemBlock := io.inputMemBlock((i + 1) * 64 - 1, i * 64)
+  }
   val inputBlockReadable = Wire(Bool())
   inputBlockReadable := inputAddressAccepted && io.inputMemBlockValid
-  core.io.inputMemBlockValid := inputBlockReadable && initDone
-  core.io.inputBits := Mux(inputBitsRemaining > 512.U, 512.U, inputBitsRemaining(util.log2Up(513) - 1, 0))
+  for (i <- 0 until 8) {
+    cores(i).io.inputMemBlockValid := inputBlockReadable && initDone
+  }
+  for (i <- 0 until 8) {
+    cores(i).io.inputBits := Mux(inputBitsRemainingPerCore(i) > 64.U, 64.U, inputBitsRemainingPerCore(i))
+  }
   when (inputBlockReadable) {
     printf(p"input block 0x${Hexadecimal(io.inputMemBlock)} at address 0x${Hexadecimal(io.inputMemAddr)} accepted for core $coreId\n")
     when (isInit) {
       inputMemAddr := io.inputMemBlock(63, 0)
-      inputBitsRemaining := io.inputMemBlock(127, 64)
-      outputMemAddr := io.inputMemBlock(191, 128) + 64.U
-      outputLenAddr := io.inputMemBlock(191, 128)
+      outputMemAddr := io.inputMemBlock(127, 64) + 64.U
+      outputLenAddr := io.inputMemBlock(127, 64)
+      for (i <- 0 until 8) {
+        inputBitsRemainingPerCore(i) := io.inputMemBlock(127 + 32 * (i + 1), 128 + 32 * i)
+      }
       isInit := false.B
       initDone := true.B
     } .otherwise {
-      inputBitsRemaining := Mux(inputBitsRemaining > 512.U, inputBitsRemaining - 512.U, 0.U)
+      for (i <- 0 until 8) {
+        inputBitsRemainingPerCore(i) := Mux(inputBitsRemainingPerCore(i) > 64.U,
+          inputBitsRemainingPerCore(i) - 64.U, 0.U)
+      }
       inputMemAddr := inputMemAddr + 64.U
     }
     inputAddressAccepted := false.B
   }
-  io.inputFinished := inputBitsRemaining === 0.U
+  io.inputFinished := !someCoresBitsRemaining
   when (core.io.inputMemConsumed && inputBitsRemaining === 0.U) {
     coreInputFinished := true.B
   }
