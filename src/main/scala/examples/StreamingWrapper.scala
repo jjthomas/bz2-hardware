@@ -3,8 +3,8 @@ package examples
 import chisel3._
 import chisel3.core.{IntParam, Reg, Bundle, Module}
 
-class DualPortBRAM(dataWidth: Int, addrWidth: Int) extends BlackBox(Map("DATA" -> IntParam(dataWidth),
-                                                                        "ADDR" -> IntParam(addrWidth))) {
+class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends BlackBox(Map("DATA" -> IntParam(dataWidth),
+                                                                        "ADDR" -> IntParam(addrWidth))) */ {
   val io = IO(new Bundle {
     val a_addr = Input(UInt(addrWidth.W))
     val a_din = Input(UInt(dataWidth.W))
@@ -205,18 +205,42 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
     when (isInit) {
       for (i <- 0 until 4) {
         when (io.inputMemIdx === i.U) {
-          inputMemAddr((i + 1) * 16 - 1, i * 16) := io.inputMemBlock
+          val result =
+            if (i == 0) {
+              inputMemAddr(63, (i + 1) * 16)##io.inputMemBlock
+            } else if (i == 3) {
+              io.inputMemBlock##inputMemAddr(i * 16, 0)
+            } else {
+              inputMemAddr(63, (i + 1) * 16)##io.inputMemBlock##inputMemAddr(i * 16, 0)
+            }
+          inputMemAddr := result
         }
       }
       for (i <- 0 until 4) {
         when (io.inputMemIdx === (i + 4).U) {
-          inputBitsRemaining((i + 1) * 16 - 1, i * 16) := io.inputMemBlock
+          val result =
+            if (i == 0) {
+              inputBitsRemaining(63, (i + 1) * 16)##io.inputMemBlock
+            } else if (i == 3) {
+              io.inputMemBlock##inputBitsRemaining(i * 16, 0)
+            } else {
+              inputBitsRemaining(63, (i + 1) * 16)##io.inputMemBlock##inputBitsRemaining(i * 16, 0)
+            }
+          inputBitsRemaining := result
         }
       }
       for (i <- 0 until 4) {
         when (io.inputMemIdx === (i + 8).U) {
-          outputMemAddr((i + 1) * 16 - 1, i * 16) := io.inputMemBlock
-          outputLenAddr((i + 1) * 16 - 1, i * 16) := io.inputMemBlock
+          val result =
+            if (i == 0) {
+              outputMemAddr(63, (i + 1) * 16)##io.inputMemBlock
+            } else if (i == 3) {
+              io.inputMemBlock##outputMemAddr(i * 16, 0)
+            } else {
+              outputMemAddr(63, (i + 1) * 16)##io.inputMemBlock##outputMemAddr(i * 16, 0)
+            }
+          outputMemAddr := result
+          outputLenAddr := result
         }
       }
       when (io.inputMemIdx === 31.U) {
