@@ -80,7 +80,7 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           val inputCore = offset / (linesPerChunk * 64)
           val inputElement = (offset / 64) % linesPerChunk
           assert(inputElement == perCoreInputCounters(i)(inputCore) - 1)
-          pushBlockToInputChannel(BigInt(inputCore + inputElement), i)
+          pushBlockToInputChannel(BigInt(inputCore + inputElement + 1), i)
           perCoreInputCounters(i)(inputCore) += 1
         }
       }
@@ -110,7 +110,7 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           assert(peek(c.io.outputMemBlocks(i)).toInt == linesPerChunk * 64 * 8)
         } else {
           val (_, inputCore) = getInputLocForOutputLoc(i, outputCore)
-          assert(peek(c.io.outputMemBlocks(i)).toInt == inputCore + outputElement - 1)
+          assert(peek(c.io.outputMemBlocks(i)).toInt == inputCore + outputElement)
         }
         step(1)
         poke(c.io.outputMemAddrReadys(i), false)
