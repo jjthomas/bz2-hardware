@@ -19,16 +19,14 @@ class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends Bl
   // simulation model for BRAM
   // there's no guarantee about what happens on
   // collisions (sim access to same address with two memory ports)
-  val mem = Mem(1 << addrWidth, UInt(dataWidth.W))
+  val mem = SyncReadMem(1 << addrWidth, UInt(dataWidth.W))
 
-  val regAddrA = RegNext(io.a_addr)
-  io.a_dout := mem.read(regAddrA)
+  io.a_dout := mem.read(io.a_addr)
   when (io.a_wr) {
     mem.write(io.a_addr, io.a_din)
   }
 
-  val regAddrB = RegNext(io.b_addr)
-  io.b_dout := mem.read(regAddrB)
+  io.b_dout := mem.read(io.b_addr)
   when (io.b_wr) {
     mem.write(io.b_addr, io.b_din)
   }
@@ -451,5 +449,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 }
 
 object StreamingWrapperDriver extends App {
-  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 100))
+  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 50))
 }
