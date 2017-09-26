@@ -434,10 +434,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         io.outputMemBlockReadys(i) && outputBufferValid, false.B)
     }
 
+    when (io.outputMemBlockReadys(i) && io.outputMemBlockValids(i)) {
+      printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core ${curOutputCore(i)}, channel $i\n")
+    }
     when (cores(curOutputCore(i)).outputFinished || (io.outputMemBlockReadys(i) && outputBufferValid)) {
       curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) - 1).U, outputChannelBounds(i).U,
         curOutputCore(i) + 1.U)
-      printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core ${curOutputCore(i)}, channel $i\n")
       outputBufferValid := false.B
     }
   }
