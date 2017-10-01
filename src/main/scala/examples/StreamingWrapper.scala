@@ -3,6 +3,8 @@ package examples
 import chisel3._
 import chisel3.core.{IntParam, Reg, Bundle, Module}
 
+import scala.collection.mutable.ArrayBuffer
+
 class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends BlackBox(Map("DATA" -> IntParam(dataWidth),
                                                                         "ADDR" -> IntParam(addrWidth))) */ {
   val io = IO(new Bundle {
@@ -364,9 +366,140 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
       (i - inputChannelBounds(curInputChannel)) * 64, i))
   }
-  // TODO may want to divide this into channel groups so that we don't have to do the random access
-  // across all cores
+
   val cores = VecInit(_cores.map(_.io))
+
+  var treeLevel = 0
+  val selInputMemAddr = new Array[UInt](numInputChannels)
+  val selInputMemAddrValid = new Array[Bool](numInputChannels)
+  val selInputMemBlockReady = new Array[Bool](numInputChannels)
+  val selInputFinished = new Array[Bool](numInputChannels)
+  for (chan <- 0 until numInputChannels) {
+    var curTreeLevel = new Array[(UInt, Bool, Bool, Bool)](Math.pow(2, util.log2Ceil(numCores)).toInt)
+    for (i <- 0 until curTreeLevel.length) {
+      if (i >= inputChannelBounds(chan) && i < inputChannelBounds(chan + 1)) {
+        curTreeLevel(i) = ((cores(i).inputMemAddr, cores(i).inputMemAddrValid, cores(i).inputMemBlockReady,
+          cores(i).inputFinished))
+      } else {
+        curTreeLevel(i) = null
+      }
+    }
+    treeLevel = 0
+    while (curTreeLevel.length > 1) {
+      val newTreeLevel = new Array[(UInt, Bool, Bool, Bool)](curTreeLevel.length / 2)
+      for (i <- 0 until curTreeLevel.length by 2) {
+        if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
+          newTreeLevel(i / 2) = null
+        } else {
+          val curInputMemAddr = Reg(UInt(64.W))
+          val curInputMemAddrValid = Reg(Bool())
+          val curInputMemBlockReady = Reg(Bool())
+          val curInputFinished = Reg(Bool())
+          if (curTreeLevel(i) == null) {
+            curInputMemAddr := curTreeLevel(i + 1)._1
+            curInputMemAddrValid := curTreeLevel(i + 1)._2
+            curInputMemBlockReady := curTreeLevel(i + 1)._3
+            curInputFinished := curTreeLevel(i + 1)._4
+          } else if (curTreeLevel(i + 1) == null) {
+            curInputMemAddr := curTreeLevel(i)._1
+            curInputMemAddrValid := curTreeLevel(i)._2
+            curInputMemBlockReady := curTreeLevel(i)._3
+            curInputFinished := curTreeLevel(i)._4
+          } else {
+            curInputMemAddr := Mux(curInputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._1,
+              curTreeLevel(i)._1)
+            curInputMemAddrValid := Mux(curInputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._2,
+              curTreeLevel(i)._2)
+            curInputMemBlockReady := Mux(curInputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._3,
+              curTreeLevel(i)._3)
+            curInputFinished := Mux(curInputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._4,
+              curTreeLevel(i)._4)
+          }
+          newTreeLevel(i / 2) = (curInputMemAddr, curInputMemAddrValid, curInputMemBlockReady, curInputFinished)
+        }
+      }
+      curTreeLevel = newTreeLevel
+      treeLevel += 1
+    }
+    selInputMemAddr(chan) = curTreeLevel(0)._1
+    selInputMemAddrValid(chan) = curTreeLevel(0)._2
+    selInputMemBlockReady(chan) = curTreeLevel(0)._3
+    selInputFinished(chan) = curTreeLevel(0)._4
+  }
+
+  // TODO massive code duplication here
+  val selOutputMemAddr = new Array[UInt](numOutputChannels)
+  val selOutputMemAddrValid = new Array[Bool](numOutputChannels)
+  val selOutputMemBlockValid = new Array[Bool](numOutputChannels)
+  val selOutputMemBlock = new Array[UInt](numOutputChannels)
+  val selOutputMemIdx = new Array[UInt](numOutputChannels)
+  val selOutputFinished = new Array[Bool](numOutputChannels)
+  for (chan <- 0 until numOutputChannels) {
+    var curTreeLevel = new Array[(UInt, Bool, Bool, UInt, UInt, Bool)](Math.pow(2, util.log2Ceil(numCores)).toInt)
+    for (i <- 0 until curTreeLevel.length) {
+      if (i >= outputChannelBounds(chan) && i < outputChannelBounds(chan + 1)) {
+        curTreeLevel(i) = ((cores(i).outputMemAddr, cores(i).outputMemAddrValid, cores(i).outputMemBlockValid,
+          cores(i).outputMemBlock, cores(i).outputMemIdx, cores(i).outputFinished))
+      } else {
+        curTreeLevel(i) = null
+      }
+    }
+    treeLevel = 0
+    while (curTreeLevel.length > 1) {
+      val newTreeLevel = new Array[(UInt, Bool, Bool, UInt, UInt, Bool)](curTreeLevel.length / 2)
+      for (i <- 0 until curTreeLevel.length by 2) {
+        if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
+          newTreeLevel(i / 2) = null
+        } else {
+          val curOutputMemAddr = Reg(UInt(64.W))
+          val curOutputMemAddrValid = Reg(Bool())
+          val curOutputMemBlockValid = Reg(Bool())
+          val curOutputMemBlock = Reg(UInt(16.W))
+          val curOutputMemIdx = Reg(UInt(5.W))
+          val curOutputFinished = Reg(Bool())
+          if (curTreeLevel(i) == null) {
+            curOutputMemAddr := curTreeLevel(i + 1)._1
+            curOutputMemAddrValid := curTreeLevel(i + 1)._2
+            curOutputMemBlockValid := curTreeLevel(i + 1)._3
+            curOutputMemBlock := curTreeLevel(i + 1)._4
+            curOutputMemIdx := curTreeLevel(i + 1)._5
+            curOutputFinished := curTreeLevel(i + 1)._6
+          } else if (curTreeLevel(i + 1) == null) {
+            curOutputMemAddr := curTreeLevel(i)._1
+            curOutputMemAddrValid := curTreeLevel(i)._2
+            curOutputMemBlockValid := curTreeLevel(i)._3
+            curOutputMemBlock := curTreeLevel(i)._4
+            curOutputMemIdx := curTreeLevel(i)._5
+            curOutputFinished := curTreeLevel(i)._6
+          } else {
+            curOutputMemAddr := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._1,
+              curTreeLevel(i)._1)
+            curOutputMemAddrValid := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._2,
+              curTreeLevel(i)._2)
+            curOutputMemBlockValid := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._3,
+              curTreeLevel(i)._3)
+            curOutputMemBlock := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._4,
+              curTreeLevel(i)._4)
+            curOutputMemIdx := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._5,
+              curTreeLevel(i)._5)
+            curOutputFinished := Mux(curOutputCore(chan)(treeLevel, treeLevel) === 1.U, curTreeLevel(i + 1)._6,
+              curTreeLevel(i)._6)
+          }
+          newTreeLevel(i / 2) = (curOutputMemAddr, curOutputMemAddrValid, curOutputMemBlockValid,
+            curOutputMemBlock, curOutputMemIdx, curOutputFinished)
+        }
+      }
+      curTreeLevel = newTreeLevel
+      treeLevel += 1
+    }
+    selOutputMemAddr(chan) = curTreeLevel(0)._1
+    selOutputMemAddrValid(chan) = curTreeLevel(0)._2
+    selOutputMemBlockValid(chan) = curTreeLevel(0)._3
+    selOutputMemBlock(chan) = curTreeLevel(0)._4
+    selOutputMemIdx(chan) = curTreeLevel(0)._5
+    selOutputFinished(chan) = curTreeLevel(0)._6
+  }
+
   for (i <- 0 until numInputChannels) {
     curInputCore(i) = RegInit(inputChannelBounds(i).asUInt(util.log2Ceil(Math.max(numCores, 2)).W))
   }
@@ -375,6 +508,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   }
 
   for (i <- 0 until numInputChannels) {
+    val treeCycleCounterInput = RegInit(0.asUInt(util.log2Ceil(treeLevel + 1).W))
+    when (treeCycleCounterInput =/= treeLevel.U) {
+      treeCycleCounterInput := treeCycleCounterInput + 1.U
+    }
+    val inputMemAddrValid = RegInit(false.B)
+    val inputMemAddrTransComplete = RegInit(false.B)
     val inputBuffer = Reg(Vec(32, UInt(16.W)))
     val inputBufferIdx = RegInit(0.asUInt(5.W))
     val inputBufferValid = RegInit(false.B)
@@ -394,10 +533,17 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
     }
 
-    io.inputMemAddrs(i) := cores(curInputCore(i)).inputMemAddr
-    io.inputMemAddrValids(i) := cores(curInputCore(i)).inputMemAddrValid
+    io.inputMemAddrs(i) := selInputMemAddr(i)
+    when ((treeCycleCounterInput === treeLevel.U) && selInputMemAddrValid(i) && !inputMemAddrTransComplete) {
+      inputMemAddrValid := true.B
+    }
+    when (inputMemAddrValid && io.inputMemAddrReadys(i)) {
+      inputMemAddrValid := false.B
+      inputMemAddrTransComplete := true.B
+    }
+    io.inputMemAddrValids(i) := inputMemAddrValid
     // TODO make sure it's fine for this to be asserted even after the block is read
-    io.inputMemBlockReadys(i) := cores(curInputCore(i)).inputMemBlockReady
+    io.inputMemBlockReadys(i) := (treeCycleCounterInput === treeLevel.U) && selInputMemBlockReady(i)
     for (j <- inputChannelBounds(i) until inputChannelBounds(i + 1)) {
       cores(j).inputMemAddrReady := Mux(curInputCore(i) === j.U, io.inputMemAddrReadys(i), false.B)
       cores(j).inputMemBlock := inputBuffer(inputBufferIdx)
@@ -405,25 +551,40 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       cores(j).inputMemBlockValid := Mux(curInputCore(i) === j.U, inputBufferValid, false.B)
     }
 
-    when (cores(curInputCore(i)).inputFinished || inputBufferIdx === 31.U) {
+    when ((treeCycleCounterInput === treeLevel.U) && (selInputFinished(i) || inputBufferIdx === 31.U)) {
       curInputCore(i) := Mux(curInputCore(i) === (inputChannelBounds(i + 1) - 1).U, inputChannelBounds(i).U,
         curInputCore(i) + 1.U)
+      treeCycleCounterInput := 0.U
+      inputMemAddrTransComplete := false.B
     }
   }
 
   for (i <- 0 until numOutputChannels) {
+    val treeCycleCounterOutput = RegInit(0.asUInt(util.log2Ceil(treeLevel + 1).W))
+    when (treeCycleCounterOutput =/= treeLevel.U) {
+      treeCycleCounterOutput := treeCycleCounterOutput + 1.U
+    }
+    val outputMemAddrValid = RegInit(false.B)
+    val outputMemAddrTransComplete = RegInit(false.B)
     val outputBuffer = Reg(Vec(32, UInt(16.W)))
     val outputBufferValid = RegInit(false.B)
-    when (cores(curOutputCore(i)).outputMemBlockValid && cores(curOutputCore(i)).outputMemIdx === 31.U) {
+    when ((treeCycleCounterOutput === treeLevel.U) && selOutputMemBlockValid(i) && selOutputMemIdx(i) === 31.U) {
       outputBufferValid := true.B
     }
     // TODO this when wrapper may not be needed depending on the behavior of the inner core
     when (!outputBufferValid) {
-      outputBuffer(cores(curOutputCore(i)).outputMemIdx) := cores(curOutputCore(i)).outputMemBlock
+      outputBuffer(selOutputMemIdx(i)) := selOutputMemBlock(i)
     }
 
-    io.outputMemAddrs(i) := cores(curOutputCore(i)).outputMemAddr
-    io.outputMemAddrValids(i) := cores(curOutputCore(i)).outputMemAddrValid
+    io.outputMemAddrs(i) := selOutputMemAddr(i)
+    when ((treeCycleCounterOutput === treeLevel.U) && selOutputMemAddrValid(i) && !outputMemAddrTransComplete) {
+      outputMemAddrValid := true.B
+    }
+    when (outputMemAddrValid && io.outputMemAddrReadys(i)) {
+      outputMemAddrValid := false.B
+      outputMemAddrTransComplete := true.B
+    }
+    io.outputMemAddrValids(i) := outputMemAddrValid
     io.outputMemBlocks(i) := outputBuffer.asUInt
     io.outputMemBlockValids(i) := outputBufferValid
     for (j <- outputChannelBounds(i) until outputChannelBounds(i + 1)) {
@@ -435,10 +596,13 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (io.outputMemBlockReadys(i) && io.outputMemBlockValids(i)) {
       printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core ${curOutputCore(i)}, channel $i\n")
     }
-    when (cores(curOutputCore(i)).outputFinished || (io.outputMemBlockReadys(i) && outputBufferValid)) {
+    when ((treeCycleCounterOutput === treeLevel.U) &&
+      (selOutputFinished(i) || (io.outputMemBlockReadys(i) && outputBufferValid))) {
       curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) - 1).U, outputChannelBounds(i).U,
         curOutputCore(i) + 1.U)
       outputBufferValid := false.B
+      treeCycleCounterOutput := 0.U
+      outputMemAddrTransComplete := false.B
     }
   }
   var cumFinished = cores(0).outputFinished
@@ -449,5 +613,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 }
 
 object StreamingWrapperDriver extends App {
-  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 50))
+  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 200))
 }
