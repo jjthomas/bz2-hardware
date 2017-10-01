@@ -3,8 +3,6 @@ package examples
 import chisel3._
 import chisel3.core.{IntParam, Reg, Bundle, Module}
 
-import scala.collection.mutable.ArrayBuffer
-
 class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends BlackBox(Map("DATA" -> IntParam(dataWidth),
                                                                         "ADDR" -> IntParam(addrWidth))) */ {
   val io = IO(new Bundle {
@@ -369,6 +367,13 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
   val cores = VecInit(_cores.map(_.io))
 
+  for (i <- 0 until numInputChannels) {
+    curInputCore(i) = RegInit(inputChannelBounds(i).asUInt(util.log2Ceil(Math.max(numCores, 2)).W))
+  }
+  for (i <- 0 until numOutputChannels) {
+    curOutputCore(i) = RegInit(outputChannelBounds(i).asUInt(util.log2Ceil(Math.max(numCores, 2)).W))
+  }
+
   var treeLevel = 0
   val selInputMemAddr = new Array[UInt](numInputChannels)
   val selInputMemAddrValid = new Array[Bool](numInputChannels)
@@ -498,13 +503,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     selOutputMemBlock(chan) = curTreeLevel(0)._4
     selOutputMemIdx(chan) = curTreeLevel(0)._5
     selOutputFinished(chan) = curTreeLevel(0)._6
-  }
-
-  for (i <- 0 until numInputChannels) {
-    curInputCore(i) = RegInit(inputChannelBounds(i).asUInt(util.log2Ceil(Math.max(numCores, 2)).W))
-  }
-  for (i <- 0 until numOutputChannels) {
-    curOutputCore(i) = RegInit(outputChannelBounds(i).asUInt(util.log2Ceil(Math.max(numCores, 2)).W))
   }
 
   for (i <- 0 until numInputChannels) {
