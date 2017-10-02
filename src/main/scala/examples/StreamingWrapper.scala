@@ -80,7 +80,7 @@ class PassThrough extends Module {
 
   inputBram.io.b_wr := false.B
   inputBram.io.b_addr := inputReadAddr
-  when (inputBlockLoaded && inputPieceBitsRemaining === 0.U && inputBitsRemaining =/= 0.U) {
+  when (inputBlockLoaded && inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) {
     when (!inputPieceRead) {
       inputPieceRead := true.B
     } .otherwise {
@@ -93,7 +93,7 @@ class PassThrough extends Module {
     }
   }
   val inputAdvance = Wire(Bool())
-  inputAdvance := outputPieceBits =/= 16.U && !(outputBits === 512.U) && inputPieceBitsRemaining =/= 0.U
+  inputAdvance := outputPieceBits =/= 16.U && !(outputBits === 512.U) && !(inputPieceBitsRemaining === 0.U)
   when (inputAdvance) {
     inputPieceBitsRemaining := inputPieceBitsRemaining - 1.U
     inputBitsRemaining := inputBitsRemaining - 1.U
