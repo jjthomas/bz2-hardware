@@ -153,14 +153,14 @@ class PassThrough extends Module {
 }
 
 class StreamingCoreIO extends Bundle {
-  val inputMemAddr = Output(UInt(64.W))
+  val inputMemAddr = Output(UInt(32.W))
   val inputMemAddrValid = Output(Bool())
   val inputMemAddrReady = Input(Bool())
   val inputMemBlock = Input(UInt(16.W))
   val inputMemIdx = Input(UInt(5.W))
   val inputMemBlockValid = Input(Bool())
   val inputMemBlockReady = Output(Bool())
-  val outputMemAddr = Output(UInt(64.W))
+  val outputMemAddr = Output(UInt(32.W))
   val outputMemAddrValid = Output(Bool())
   val outputMemAddrReady = Input(Bool())
   val outputMemBlock = Output(UInt(16.W))
@@ -178,14 +178,14 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
-  val inputBitsRemaining = RegInit(1.asUInt(64.W)) // init nonzero so that inputFinished isn't immediately asserted
+  val inputBitsRemaining = RegInit(1.asUInt(32.W)) // init nonzero so that inputFinished isn't immediately asserted
   val coreInputFinished = RegInit(false.B)
-  val outputBits = RegInit(0.asUInt(64.W))
+  val outputBits = RegInit(0.asUInt(32.W))
   val outputBlockCounter = RegInit(0.asUInt(5.W))
   val outputLengthCommitted = RegInit(false.B)
-  val inputMemAddr = RegInit(metadataPtr.asUInt(64.W))
-  val outputMemAddr = Reg(UInt(64.W))
-  val outputLenAddr = Reg(UInt(64.W))
+  val inputMemAddr = RegInit(metadataPtr.asUInt(32.W))
+  val outputMemAddr = Reg(UInt(32.W))
+  val outputLenAddr = Reg(UInt(32.W))
   val outputMemFlushed = RegInit(false.B)
 
   val inputAddressAccepted = RegInit(false.B)
@@ -203,44 +203,38 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   val inputBlockReadable = Wire(Bool())
   inputBlockReadable := inputAddressAccepted && io.inputMemBlockValid
   core.io.inputMemBlockValid := inputBlockReadable && initDone
-  core.io.inputBits := Mux(inputBitsRemaining > 512.U, 512.U, inputBitsRemaining(util.log2Ceil(513) - 1, 0))
+  core.io.inputBits := Mux(inputBitsRemaining > 512.U, 512.U, inputBitsRemaining)
   when (inputBlockReadable) {
     when (isInit) {
-      for (i <- 0 until 4) {
+      for (i <- 0 until 2) {
         when (io.inputMemIdx === i.U) {
           val result =
             if (i == 0) {
-              inputMemAddr(63, (i + 1) * 16)##io.inputMemBlock
-            } else if (i == 3) {
-              io.inputMemBlock##inputMemAddr(i * 16 - 1, 0)
+              inputMemAddr(31, 16)##io.inputMemBlock
             } else {
-              inputMemAddr(63, (i + 1) * 16)##io.inputMemBlock##inputMemAddr(i * 16 - 1, 0)
+              io.inputMemBlock##inputMemAddr(15, 0)
             }
           inputMemAddr := result
         }
       }
-      for (i <- 0 until 4) {
+      for (i <- 0 until 2) {
         when (io.inputMemIdx === (i + 4).U) {
           val result =
             if (i == 0) {
-              inputBitsRemaining(63, (i + 1) * 16)##io.inputMemBlock
-            } else if (i == 3) {
-              io.inputMemBlock##inputBitsRemaining(i * 16 - 1, 0)
+              inputBitsRemaining(31, 16)##io.inputMemBlock
             } else {
-              inputBitsRemaining(63, (i + 1) * 16)##io.inputMemBlock##inputBitsRemaining(i * 16 - 1, 0)
+              io.inputMemBlock##inputBitsRemaining(15, 0)
             }
           inputBitsRemaining := result
         }
       }
-      for (i <- 0 until 4) {
+      for (i <- 0 until 2) {
         when (io.inputMemIdx === (i + 8).U) {
           val result =
             if (i == 0) {
-              outputMemAddr(63, (i + 1) * 16)##io.inputMemBlock
-            } else if (i == 3) {
-              io.inputMemBlock##outputMemAddr(i * 16 - 1, 0)
+              outputMemAddr(31, 16)##io.inputMemBlock
             } else {
-              outputMemAddr(63, (i + 1) * 16)##io.inputMemBlock##outputMemAddr(i * 16 - 1, 0)
+              io.inputMemBlock##outputMemAddr(15, 0)
             }
           outputMemAddr := result
           outputLenAddr := result
@@ -291,8 +285,7 @@ class StreamingCore(metadataPtr: Long, coreId: Int) extends Module {
   }
   val outputBitsBlock = Wire(UInt(16.W))
   outputBitsBlock := Mux(outputBlockCounter === 0.U, outputBits(15, 0), Mux(outputBlockCounter === 1.U,
-    outputBits(31, 16), Mux(outputBlockCounter === 2.U, outputBits(47, 32),
-      Mux(outputBlockCounter === 3.U, outputBits(63, 48), 0.U))))
+    outputBits(31, 16), 0.U))
   io.outputMemBlock := Mux(core.io.outputFinished, outputBitsBlock, core.io.outputMemBlock)
   io.outputMemIdx := outputBlockCounter
 
