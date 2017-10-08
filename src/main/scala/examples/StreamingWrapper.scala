@@ -59,6 +59,7 @@ class PassThrough extends Module {
   val outputBits = RegInit(0.asUInt(util.log2Ceil(513).W))
   val outputPieceBits = RegInit(0.asUInt(util.log2Ceil(17).W))
   // TODO make BRAM width configurable throughout circuit
+  // TODO starting reading from inputBram before writes are complete, especially for byte-wise ops
   val inputBram = Module(new DualPortBRAM(16, 5))
   // inputReadAddr and outputWriteAddr must wrap back to 0 after their last value (valid address range must
   // be a power of two)
@@ -536,6 +537,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         groupCounterInputAddrs := groupCounterInputAddrs + 1.U
       }
     }
+    // TODO potentially increase transaction size now that we have BRAM buffers and/or allow out-of-order transactions
     io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddrs)
     io.inputMemAddrValids(i) := treeCycleCounterInputAddrs === inputTreeLevel.U &&
       !selInputAddrsIgnore(i)(groupCounterInputAddrs)
@@ -565,6 +567,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       groupCounterInputBlocks := 0.U
     }
     when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
+      // TODO this concat doesn't produce the core number when groupCounterInputBlocks has only one value
       printf(p"inputBuffer: 0x${Hexadecimal(io.inputMemBlocks(i))} for core " +
         p"${curInputBlockCore(i)##groupCounterInputBlocks}, channel $i\n")
     }
