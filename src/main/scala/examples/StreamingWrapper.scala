@@ -408,7 +408,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           newTreeLevel(i / 2) = new Array[(UInt, Bool, Bool, Bool)](inputGroupSize)
           for (j <- 0 until inputGroupSize) {
             // TODO make use of registers configurable (e.g. every other tree level, every 4, etc.)
-            val curInputMemAddr = Reg(UInt(64.W))
+            val curInputMemAddr = Reg(UInt(32.W))
             val curInputMemBlockReady = Reg(Bool())
             val curInputAddrsIgnore = Reg(Bool())
             val curInputBlocksFinished = Reg(Bool())
@@ -471,7 +471,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
           newTreeLevel(i / 2) = null
         } else {
-          val curOutputMemAddr = Reg(UInt(64.W))
+          val curOutputMemAddr = Reg(UInt(32.W))
           val curOutputMemAddrValid = Reg(Bool())
           val curOutputMemBlockValid = Reg(Bool())
           val curOutputMemBlock = Reg(UInt(16.W))
