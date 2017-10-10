@@ -525,22 +525,16 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (treeCycleCounterInputAddrs =/= inputTreeLevel.U) {
       treeCycleCounterInputAddrs := treeCycleCounterInputAddrs + 1.U
     }
-    val groupCounterInputAddrs = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
     when (treeCycleCounterInputAddrs === inputTreeLevel.U && (io.inputMemAddrReadys(i) ||
-      selInputAddrsIgnore(i)(groupCounterInputAddrs))) {
-      when (groupCounterInputAddrs === (inputGroupSize - 1).U) {
-        curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-          (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
-        treeCycleCounterInputAddrs := 0.U
-        groupCounterInputAddrs := 0.U
-      } .otherwise {
-        groupCounterInputAddrs := groupCounterInputAddrs + 1.U
-      }
+      selInputAddrsIgnore(i)(0))) {
+      curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
+        (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
+      treeCycleCounterInputAddrs := 0.U
     }
     // TODO potentially increase transaction size now that we have BRAM buffers and/or allow out-of-order transactions
-    io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddrs)
+    io.inputMemAddrs(i) := selInputMemAddr(i)(0)
     io.inputMemAddrValids(i) := treeCycleCounterInputAddrs === inputTreeLevel.U &&
-      !selInputAddrsIgnore(i)(groupCounterInputAddrs)
+      !selInputAddrsIgnore(i)(0)
 
     val treeCycleCounterInputBlocks = RegInit(0.asUInt(util.log2Ceil(inputTreeLevel + 1).W))
     when (treeCycleCounterInputBlocks =/= inputTreeLevel.U) {
@@ -583,6 +577,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
     }
     // TODO make sure it's fine for this to be asserted even after the block is read
+    // TODO with interleaving need to consume "garbage" blocks for cores in an interleaving
+    // group that have less input than their peers (and first core in group must keep
+    // issuing requests even after it's done if doesn't have the largest input)
     io.inputMemBlockReadys(i) := (treeCycleCounterInputBlocks === inputTreeLevel.U) &&
       !(groupCounterInputBlocks === inputGroupSize.U) &&
       selInputMemBlockReady(i)(groupCounterInputBlocks) && !selInputBlocksFinished(i)(groupCounterInputBlocks)
@@ -590,8 +587,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     for (j <- inputChannelBounds(i) / inputGroupSize until inputChannelBounds(i + 1) / inputGroupSize) {
       for (k <- j * inputGroupSize until (j + 1) * inputGroupSize) {
         cores(k).inputMemAddrConsumed := Mux(curInputAddrCore(i) === j.U,
-          groupCounterInputAddrs === (k - j * inputGroupSize).U && io.inputMemAddrReadys(i) &&
-            io.inputMemAddrValids(i), false.B)
+          io.inputMemAddrReadys(i) && io.inputMemAddrValids(i), false.B)
         cores(k).inputMemBlock := inputBuffer(k - j * inputGroupSize)(inputBufferIdx(k - j * inputGroupSize))
         cores(k).inputMemIdx := inputBufferIdx(k - j * inputGroupSize)
         cores(k).inputMemBlockValid := Mux(curInputBlockCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
