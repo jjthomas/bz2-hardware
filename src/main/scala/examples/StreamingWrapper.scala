@@ -642,7 +642,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
     }
     io.outputMemAddrs(i) := outputMemAddr(groupCounterOutput)
-    io.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutput)
+    io.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutput) && !curAddrComplete
     io.outputMemBlocks(i) := outputBuffer(groupCounterOutput).asUInt
     io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutput) && curAddrComplete
     val validSelOutputFinished = Wire(Bool())
@@ -670,9 +670,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         cores(k).outputMemAddrReady := Mux(curOutputCore(i) === j.U, treeCycleCounterOutput === outputTreeLevel.U
           && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize), false.B)
         cores(k).outputMemBlockReady := Mux(curOutputCore(i) === j.U,
-          treeCycleCounterOutput === outputTreeLevel.U && selOutputMemBlockValid(i)(k - j * outputGroupSize) &&
-            selOutputMemIdx(i)(k - j * outputGroupSize) === 31.U && !outputBufferValid(k - j * outputGroupSize),
-          false.B)
+          groupCounterOutput === (k - j * outputGroupSize).U && io.outputMemBlockValids(i)
+            && io.outputMemBlockReadys(i), false.B)
       }
     }
 
