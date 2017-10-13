@@ -698,5 +698,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 }
 
 object StreamingWrapperDriver extends App {
-  chisel3.Driver.execute(args, () => new StreamingWrapper(2, Array(0L, 0L), 2, Array(0L, 0L), 224, 16, 16))
+  chisel3.Driver.execute(args, () => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L,
+    1000000000L, 1000000000L), 512, 16, 16))
 }
