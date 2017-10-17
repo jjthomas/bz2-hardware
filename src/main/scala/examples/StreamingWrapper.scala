@@ -625,8 +625,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val outputMemAddr = Reg(Vec(outputGroupSize, UInt(32.W)))
     val outputBuffer = Reg(Vec(outputGroupSize, Vec(32, UInt(16.W))))
     val outputBufferValid = RegInit(VecInit((0 until outputGroupSize).map(_ => false.B)))
-    val groupCounterOutput = RegInit(0.asUInt(util.log2Ceil(Math.max(outputGroupSize, 2)).W))
-    val curAddrComplete = RegInit(false.B)
+    val groupCounterOutputAddr = RegInit(0.asUInt(util.log2Ceil(Math.max(outputGroupSize, 2)).W))
+    val addrsComplete = RegInit(false.B)
+    val groupCounterOutputBlock = RegInit(0.asUInt(util.log2Ceil(Math.max(outputGroupSize, 2)).W))
     val zerothCoreDelay = RegInit(false.B) // give zeroth core in group one cycle to produce valid address
     when (treeCycleCounterOutput === outputTreeLevel.U && !zerothCoreDelay) {
       zerothCoreDelay := true.B
@@ -641,45 +642,51 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
 
       when(treeCycleCounterOutput === outputTreeLevel.U && selOutputMemAddrValid(i)(j) && !outputMemAddrValid(j) &&
-        (groupCounterOutput < j.U || !zerothCoreDelay)) {
+        (groupCounterOutputAddr < j.U || !zerothCoreDelay)) {
         outputMemAddrValid(j) := true.B
         outputMemAddr(j) := selOutputMemAddr(i)(j)
       }
     }
-    io.outputMemAddrs(i) := outputMemAddr(groupCounterOutput)
-    io.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutput) && !curAddrComplete
-    io.outputMemBlocks(i) := outputBuffer(groupCounterOutput).asUInt
-    io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutput) && curAddrComplete
-    val validSelOutputFinished = Wire(Bool())
-    validSelOutputFinished := treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutput)
-    when (!curAddrComplete && (validSelOutputFinished || (io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
-      (zerothCoreDelay && !outputMemAddrValid(groupCounterOutput)))) {
-      curAddrComplete := true.B
+    io.outputMemAddrs(i) := outputMemAddr(groupCounterOutputAddr)
+    io.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutputAddr) && !addrsComplete
+    io.outputMemBlocks(i) := outputBuffer(groupCounterOutputBlock).asUInt
+    io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutputBlock)
+    when ((treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutputAddr)) ||
+      (io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
+      (zerothCoreDelay && !outputMemAddrValid(groupCounterOutputAddr))) {
+      when (groupCounterOutputAddr === (outputGroupSize - 1).U) {
+        addrsComplete := true.B
+      } .otherwise {
+        groupCounterOutputAddr := groupCounterOutputAddr + 1.U
+      }
     }
-    when (curAddrComplete && (validSelOutputFinished || (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)) ||
-      !outputMemAddrValid(groupCounterOutput))) {
-      curAddrComplete := false.B
-      when (groupCounterOutput === (outputGroupSize - 1).U) {
+    when ((treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutputBlock)) ||
+      (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)) ||
+      (!outputMemAddrValid(groupCounterOutputBlock) &&
+        (groupCounterOutputBlock < groupCounterOutputAddr || addrsComplete))) {
+      when (groupCounterOutputBlock === (outputGroupSize - 1).U) {
         curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) / outputGroupSize - 1).U,
           (outputChannelBounds(i) / outputGroupSize).U, curOutputCore(i) + 1.U)
         treeCycleCounterOutput := 0.U
-        groupCounterOutput := 0.U
+        groupCounterOutputBlock := 0.U
+        groupCounterOutputAddr := 0.U
+        addrsComplete := false.B
         zerothCoreDelay := false.B
         for (j <- 0 until outputGroupSize) {
           outputMemAddrValid(j) := false.B
           outputBufferValid(j) := false.B
         }
       } .otherwise {
-        groupCounterOutput := groupCounterOutput + 1.U
+        groupCounterOutputBlock := groupCounterOutputBlock + 1.U
       }
     }
     for (j <- outputChannelBounds(i) / outputGroupSize until outputChannelBounds(i + 1) / outputGroupSize) {
       for (k <- j * outputGroupSize until (j + 1) * outputGroupSize) {
         cores(k).outputMemAddrReady := Mux(curOutputCore(i) === j.U, treeCycleCounterOutput === outputTreeLevel.U
           && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize) &&
-          (groupCounterOutput < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
+          (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
         cores(k).outputMemBlockReady := Mux(curOutputCore(i) === j.U,
-          groupCounterOutput === (k - j * outputGroupSize).U && io.outputMemBlockValids(i)
+          groupCounterOutputBlock === (k - j * outputGroupSize).U && io.outputMemBlockValids(i)
             && io.outputMemBlockReadys(i), false.B)
       }
     }
@@ -687,7 +694,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (io.outputMemBlockReadys(i) && io.outputMemBlockValids(i)) {
       // TODO this concat might not work, see above
       printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core " +
-        p"${curOutputCore(i)##groupCounterOutput}, channel $i\n")
+        p"${curOutputCore(i)##groupCounterOutputBlock}, channel $i\n")
     }
   }
   var cumFinished = cores(0).outputFinished
