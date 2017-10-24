@@ -23,7 +23,9 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
     val outputFinished = Output(Bool())
     val outputMemFlushed = Input(Bool())
   })
-  val inner = Module(new PassThrough(1))
+  assert(wordBits <= bramWidth)
+  assert(bramWidth % wordBits == 0)
+  val inner = Module(new PassThrough(wordBits))
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
