@@ -1,38 +1,9 @@
 package examples
 
 import chisel3._
-import chisel3.core.{IntParam, Reg, Bundle, Module}
+import chisel3.core.{Reg, Bundle, Module}
 
-class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends BlackBox(Map("DATA" -> IntParam(dataWidth),
-                                                                        "ADDR" -> IntParam(addrWidth))) */ {
-  val io = IO(new Bundle {
-    val a_addr = Input(UInt(addrWidth.W))
-    val a_din = Input(UInt(dataWidth.W))
-    val a_wr = Input(Bool())
-    val a_dout = Output(UInt(dataWidth.W))
-    val b_addr = Input(UInt(addrWidth.W))
-    val b_din = Input(UInt(dataWidth.W))
-    val b_wr = Input(Bool())
-    val b_dout = Output(UInt(dataWidth.W))
-  })
-
-  // simulation model for BRAM
-  // there's no guarantee about what happens on
-  // collisions (sim access to same address with two memory ports)
-  val mem = SyncReadMem(1 << addrWidth, UInt(dataWidth.W))
-
-  io.a_dout := mem.read(io.a_addr)
-  when (io.a_wr) {
-    mem.write(io.a_addr, io.a_din)
-  }
-
-  io.b_dout := mem.read(io.b_addr)
-  when (io.b_wr) {
-    mem.write(io.b_addr, io.b_din)
-  }
-}
-
-class PassThrough(bramWidth: Int) extends Module {
+class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new Bundle {
@@ -52,6 +23,7 @@ class PassThrough(bramWidth: Int) extends Module {
     val outputFinished = Output(Bool())
     val outputMemFlushed = Input(Bool())
   })
+  val inner = Module(new PassThrough(1))
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
@@ -100,26 +72,33 @@ class PassThrough(bramWidth: Int) extends Module {
   val inputAdvance = Wire(Bool())
   inputAdvance := outputPieceBits =/= bramWidth.U && !(outputBits === 512.U) && !(inputPieceBitsRemaining === 0.U)
   when (inputAdvance) {
-    inputPieceBitsRemaining := inputPieceBitsRemaining - 1.U
-    inputBitsRemaining := inputBitsRemaining - 1.U
-    for (i <- 0 until (bramWidth - 1)) {
-      inputMemBlock(i) := inputMemBlock(i + 1)
+    inputPieceBitsRemaining := inputPieceBitsRemaining - wordBits.U
+    inputBitsRemaining := inputBitsRemaining - wordBits.U
+    for (i <- 0 until (bramWidth - wordBits)) {
+      inputMemBlock(i) := inputMemBlock(i + wordBits)
     }
   }
 
-  val nextBitValid = Wire(Bool())
-  val nextBit = Wire(Bool())
-  nextBitValid := inputAdvance
-  nextBit := inputMemBlock(0)
-  when (nextBitValid) {
-    outputMemBlock(bramWidth - 1) := nextBit
-    for (i <- 0 until (bramWidth - 1)) {
+  val nextWord =
+    if (wordBits == 0) {
+      inputMemBlock(0)
+    } else {
+      inputMemBlock.asUInt()(wordBits - 1, 0)
+    }
+  inner.io.inputValid := inputAdvance
+  inner.io.inputWord := nextWord
+  when (inner.io.outputValid) {
+    for (i <- 0 until wordBits) {
+      outputMemBlock(bramWidth - 1 - i) := inner.io.outputWord(wordBits - 1 - i)
+    }
+    for (i <- 0 until (bramWidth - wordBits)) {
       // important: this means that in a final, partial output block the valid bits will be stored in the upper bits
       // of the block
-      outputMemBlock(i) := outputMemBlock(i + 1)
+      // TODO fix this by just running for extra cycles so that the valid bits slide down to the bottom
+      outputMemBlock(i) := outputMemBlock(i + wordBits)
     }
-    outputPieceBits := outputPieceBits + 1.U
-    outputBits := outputBits + 1.U
+    outputPieceBits := outputPieceBits + wordBits.U
+    outputBits := outputBits + wordBits.U
   }
 
   // TODO this will cause a write during read for partial pieces, but it should be safe since the data is unchanged
@@ -186,7 +165,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int) extends Modu
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new StreamingCoreIO(bramWidth))
-  val core = Module(new PassThrough(bramWidth))
+  val core = Module(new InnerCore(bramWidth, 1))
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
