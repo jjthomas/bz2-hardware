@@ -89,23 +89,22 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
     }
   inner.io.inputValid := inputAdvance
   inner.io.inputWord := nextWord
-  when (inner.io.outputValid) {
+  // outputValid must be asserted on the same cycle as inputValid if that input triggered the output
+  when (inner.io.outputValid || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits > 0.U &&
+    outputPieceBits < bramWidth.U)) {
     for (i <- 0 until wordBits) {
       outputMemBlock(bramWidth - 1 - i) := inner.io.outputWord(wordBits - 1 - i)
     }
     for (i <- 0 until (bramWidth - wordBits)) {
-      // important: this means that in a final, partial output block the valid bits will be stored in the upper bits
-      // of the block
-      // TODO fix this by just running for extra cycles so that the valid bits slide down to the bottom
       outputMemBlock(i) := outputMemBlock(i + wordBits)
     }
     outputPieceBits := outputPieceBits + wordBits.U
-    outputBits := outputBits + wordBits.U
+    when (inner.io.outputValid) {
+      outputBits := outputBits + wordBits.U
+    }
   }
 
-  // TODO this will cause a write during read for partial pieces, but it should be safe since the data is unchanged
-  outputBram.io.a_wr := outputPieceBits === bramWidth.U || (io.inputFinished && inputBitsRemaining === 0.U
-    && outputPieceBits > 0.U)
+  outputBram.io.a_wr := outputPieceBits === bramWidth.U
   outputBram.io.a_addr := outputWriteAddr
   outputBram.io.a_din := outputMemBlock.asUInt
   when (outputPieceBits === bramWidth.U) {
@@ -117,21 +116,19 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
   outputBram.io.b_wr := false.B
   outputBram.io.b_addr := outputReadAddr
   when (!outputReadingStarted &&
-    (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U))) {
+    (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits === bramWidth.U))) {
     outputReadingStarted := true.B
   }
   when (io.outputMemBlockReady && outputReadingStarted && outputReadAddr =/= (bramNumAddrs - 1).U) {
     outputReadAddr := outputReadAddr + 1.U
   }
   io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
-  io.outputMemBlockValid := outputReadingStarted &&
-    (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U))
+  io.outputMemBlockValid := outputReadingStarted
   io.outputMemBlock := outputBram.io.b_dout
   io.outputBits := outputBits
   io.outputFinished := io.inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
   when (io.outputMemFlushed) {
     outputBits := 0.U
-    outputPieceBits := 0.U
     outputReadingStarted := false.B
     outputWriteAddr := 0.U
     outputReadAddr := 0.U
