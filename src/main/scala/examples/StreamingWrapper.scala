@@ -279,10 +279,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int) extends Modu
     }
   }
   io.inputBlocksFinished := initDone && inputBitsRemaining === 0.U
-  when (core.io.inputMemConsumed && initDone && inputBitsRemaining === 0.U) {
-    coreInputFinished := true.B
-  }
-  core.io.inputFinished := coreInputFinished
+  core.io.inputFinished := initDone && inputBitsRemaining === 0.U
 
   val outputAddressAccepted = RegInit(false.B)
   val outputAddressAcceptedNext = RegInit(false.B) // because it takes a cycle after core.io.outputMemBlockReady
