@@ -112,11 +112,15 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
     outputWriteAddr := outputWriteAddr + 1.U
   }
 
+  val outputReadingStartedPrev = RegInit(false.B)
   val outputReadingStarted = RegInit(false.B)
   outputBram.io.b_wr := false.B
   outputBram.io.b_addr := outputReadAddr
-  when (!outputReadingStarted &&
+  when (!outputReadingStartedPrev &&
     (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits === bramWidth.U))) {
+    outputReadingStartedPrev := true.B
+  }
+  when (outputReadingStartedPrev && !outputReadingStarted) {
     outputReadingStarted := true.B
   }
   when (io.outputMemBlockReady && outputReadingStarted && outputReadAddr =/= (bramNumAddrs - 1).U) {
@@ -129,6 +133,7 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
   io.outputFinished := io.inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
   when (io.outputMemFlushed) {
     outputBits := 0.U
+    outputReadingStartedPrev := false.B
     outputReadingStarted := false.B
     outputWriteAddr := 0.U
     outputReadAddr := 0.U
