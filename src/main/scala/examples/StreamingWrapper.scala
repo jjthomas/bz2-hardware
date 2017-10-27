@@ -88,6 +88,7 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
       inputMemBlock.asUInt()(wordBits - 1, 0)
     }
   inner.io.inputValid := inputAdvance
+  inner.io.lastInputWord := io.inputFinished && (inputBitsRemaining - wordBits.U === 0.U)
   inner.io.inputWord := nextWord
   // outputValid must be asserted on the same cycle as inputValid if that input triggered the output
   when (inner.io.outputValid || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits > 0.U &&
