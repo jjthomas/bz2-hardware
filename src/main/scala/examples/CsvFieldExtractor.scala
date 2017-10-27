@@ -2,58 +2,7 @@ package examples
 
 import chisel3._
 
-import scala.collection.mutable.ArrayBuffer
-
-class CsvFieldExtractor(numFields: Int, targetField: Int) extends ProcessingUnit(8) {
-
-  def produceOutput(numBits: Int, bits: Array[BigInt]): (Int, Array[BigInt]) = {
-    val input = Util.bitsToChars(numBits, bits)
-    val output = new ArrayBuffer[Char]
-
-    var curField = 0
-    var inQuote = false
-    var lastChar = ' '
-
-    for (c <- input) {
-      val inQuoteNext =
-        if (c == '"') {
-          if (!inQuote) {
-            true
-          } else {
-            lastChar == '\\'
-          }
-        } else {
-          inQuote
-        }
-      val curFieldNext =
-        if (c == ',') {
-          if (!inQuote) {
-            curField + 1
-          } else {
-            curField
-          }
-        } else if (c == '\n') {
-          if (!inQuote) {
-            0
-          } else {
-            curField
-          }
-        } else {
-          curField
-        }
-      val lastCharNext = c
-
-      if (curField == targetField && curFieldNext == targetField) {
-        output.append(c)
-      }
-
-      curField = curFieldNext
-      inQuote = inQuoteNext
-      lastChar = lastCharNext
-    }
-    Util.charsToBits(output.toArray)
-  }
-
+class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends ProcessingUnit(8) {
   // state
   val curField = RegInit(0.asUInt(util.log2Ceil(numFields).W))
   val inQuote = RegInit(false.B)
@@ -93,10 +42,12 @@ class CsvFieldExtractor(numFields: Int, targetField: Int) extends ProcessingUnit
 
   // output
   io.outputWord := io.inputWord
-  io.outputValid := curField === targetField.U && curFieldNext === targetField.U
+  io.outputValid := io.inputValid && curField === targetField.U && curFieldNext === targetField.U
 
   // commit new states
-  inQuote := inQuoteNext
-  curField := curFieldNext
-  lastChar := lastCharNext
+  when (io.inputValid) {
+    inQuote := inQuoteNext
+    curField := curFieldNext
+    lastChar := lastCharNext
+  }
 }

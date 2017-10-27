@@ -11,6 +11,4 @@ abstract class ProcessingUnit(wordSize: Int) extends Module {
     val outputWord = Output(UInt(wordSize.W))
     val outputValid = Output(Bool())
   })
-
-  def produceOutput(numBits: Int, bits: Array[BigInt]): (Int, Array[BigInt])
 }

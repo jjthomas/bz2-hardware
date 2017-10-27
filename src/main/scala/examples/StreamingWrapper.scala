@@ -3,7 +3,7 @@ package examples
 import chisel3._
 import chisel3.core.{Reg, Bundle, Module}
 
-class InnerCore(bramWidth: Int, wordBits: Int, pu: ProcessingUnit) extends Module {
+class InnerCore(bramWidth: Int, wordBits: Int, puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new Bundle {
@@ -25,7 +25,7 @@ class InnerCore(bramWidth: Int, wordBits: Int, pu: ProcessingUnit) extends Modul
   })
   assert(wordBits <= bramWidth)
   assert(bramWidth % wordBits == 0)
-  val inner = Module(pu)
+  val inner = Module(puFactory(coreId))
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
@@ -113,12 +113,14 @@ class InnerCore(bramWidth: Int, wordBits: Int, pu: ProcessingUnit) extends Modul
     outputWriteAddr := outputWriteAddr + 1.U
   }
 
-  val outputReadingStartedPrev = RegInit(false.B)
+  val outputReadingStartedPrev = RegInit(false.B) // needed to make sure we don't start reading BRAM address 0
+  // on the same cycle it is written in the case of a single-word final output block
   val outputReadingStarted = RegInit(false.B)
   outputBram.io.b_wr := false.B
   outputBram.io.b_addr := outputReadAddr
   when (!outputReadingStartedPrev &&
-    (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits === bramWidth.U))) {
+    (outputBits === 512.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U &&
+      (outputPieceBits === bramWidth.U || outputPieceBits === 0.U)))) {
     outputReadingStartedPrev := true.B
   }
   when (outputReadingStartedPrev && !outputReadingStarted) {
@@ -166,11 +168,12 @@ class StreamingCoreIO(bramWidth: Int) extends Bundle {
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
-class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int, wordSize: Int, pu: ProcessingUnit) extends Module {
+class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int, wordSize: Int, puFactory: (Int) => ProcessingUnit)
+  extends Module {
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new StreamingCoreIO(bramWidth))
-  val core = Module(new InnerCore(bramWidth, wordSize, pu))
+  val core = Module(new InnerCore(bramWidth, wordSize, puFactory, coreId))
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
@@ -340,7 +343,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int, wordSize: In
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], numCores: Int, inputGroupSize: Int,
                        outputGroupSize: Int, bramWidth: Int, wordSize: Int,
-                       val puFactory: () => ProcessingUnit) extends Module {
+                       val puFactory: (Int) => ProcessingUnit) extends Module {
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(numInputChannels, UInt(64.W)))
     val inputMemAddrValids = Output(Vec(numInputChannels, Bool()))
@@ -401,7 +404,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       curOutputChannel += 1
     }
     _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * 64, bramWidth, i, wordSize, puFactory()))
+      (i - inputChannelBounds(curInputChannel)) * 64, bramWidth, i, wordSize, puFactory))
   }
 
   val cores = VecInit(_cores.map(_.io))
@@ -741,5 +744,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
 object StreamingWrapperDriver extends App {
   chisel3.Driver.execute(args, () => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L,
-    1000000000L, 1000000000L), 512, 16, 16, 16, 8, () => new PassThrough(8)))
+    1000000000L, 1000000000L), 512, 16, 16, 16, 8, (coreId: Int) => new PassThrough(8, coreId)))
 }

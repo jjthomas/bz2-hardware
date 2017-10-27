@@ -128,9 +128,13 @@ object Launcher {
       },
       "StreamingWrapper" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 16, 1, () => new PassThrough(1)),
+          1000000000L), 4, 1, 1, 16, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {
-          (c) => new StreamingWrapperTests(c, 512, Array(BigInt(1)))
+          (c) => {
+            val (numInputBits, inputBits) = Util.charsToBits("11,21112".toCharArray)
+            val (numOutputBits, outputBits) = Util.charsToBits("11".toCharArray)
+            new StreamingWrapperTests(c, numInputBits, inputBits, numOutputBits, outputBits)
+          }
         }
       }
   )
