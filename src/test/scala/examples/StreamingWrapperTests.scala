@@ -2,7 +2,11 @@ package examples
 
 import chisel3.iotesters.PeekPokeTester
 
-class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends PeekPokeTester(c) {
+class StreamingWrapperTests(c: StreamingWrapper, numInputBits: Int, inputBits: Array[BigInt])
+  extends PeekPokeTester(c) {
+  val (numOutputBits, outputBits) = c.puFactory().produceOutput(numInputBits, inputBits)
+  val inputLines = (numInputBits - 1) / 512 + 1
+  val outputLines = (numOutputBits - 1) / 512 + 1
   val perCoreInputCounters = new Array[Array[Int]](c.numInputChannels)
   val perCoreOutputCounters = new Array[Array[Int]](c.numOutputChannels)
   for (i <- 0 until c.numInputChannels) {
@@ -67,21 +71,20 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
           assert(perCoreInputCounters(i)(inputCore) == 0)
           val (outputChannel, outputCore) = getOutputLocForInputLoc(i, inputCore)
           val outputAddr = c.outputChannelStartAddrs(outputChannel) +
-            64 * (linesPerChunk + 1) * outputCore
+            64 * (inputLines + 1) * outputCore
           val inputAddr = c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i) +
-            64 * linesPerChunk * inputCore
-          val inputBits = linesPerChunk * 64 * 8
-          val memBlock = (((BigInt(outputAddr) << 64) | inputBits) << 64) | inputAddr
+            64 * inputLines * inputCore
+          val memBlock = (((BigInt(outputAddr) << 64) | numInputBits) << 64) | inputAddr
           pushBlockToInputChannel(memBlock, i)
           perCoreInputCounters(i)(inputCore) += 1
         } else {
           val offset = curAddr - (c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i))
-          assert(offset < linesPerChunk * 64 * c.numCoresForInputChannel(i))
+          assert(offset < inputLines * 64 * c.numCoresForInputChannel(i))
           assert(offset % 64 == 0)
-          val inputCore = offset / (linesPerChunk * 64)
-          val inputElement = (offset / 64) % linesPerChunk
+          val inputCore = offset / (inputLines * 64)
+          val inputElement = (offset / 64) % inputLines
           assert(inputElement == perCoreInputCounters(i)(inputCore) - 1)
-          pushBlockToInputChannel(BigInt(inputCore + inputElement + 1), i)
+          pushBlockToInputChannel(inputBits(inputElement), i)
           perCoreInputCounters(i)(inputCore) += 1
         }
         println("pushed valid input block to channel: " + i)
@@ -94,12 +97,12 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
         val curAddr = peek(c.io.outputMemAddrs(i)).toLong
         println("valid output addr from channel: " + i + ", addr: " + curAddr)
         val offset = curAddr - c.outputChannelStartAddrs(i)
-        assert(offset < (linesPerChunk + 1) * 64 * c.numCoresForOutputChannel(i))
+        assert(offset < (inputLines + 1) * 64 * c.numCoresForOutputChannel(i))
         assert(offset % 64 == 0)
-        val outputCore = offset / ((linesPerChunk + 1) * 64)
-        val outputElement = (offset / 64) % (linesPerChunk + 1)
+        val outputCore = offset / ((inputLines + 1) * 64)
+        val outputElement = (offset / 64) % (inputLines + 1)
         if (outputElement == 0) {
-          assert(perCoreOutputCounters(i)(outputCore) == linesPerChunk)
+          assert(perCoreOutputCounters(i)(outputCore) == outputLines)
         } else {
           assert(perCoreOutputCounters(i)(outputCore) + 1 == outputElement)
         }
@@ -112,10 +115,10 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
         }
         println("read valid output element from channel: " + i + ", element: " + peek(c.io.outputMemBlocks(i)).toInt)
         if (outputElement == 0) {
-          assert(peek(c.io.outputMemBlocks(i)).toInt == linesPerChunk * 64 * 8)
+          assert(peek(c.io.outputMemBlocks(i)).toInt == numOutputBits)
         } else {
           val (_, inputCore) = getInputLocForOutputLoc(i, outputCore)
-          assert(peek(c.io.outputMemBlocks(i)).toInt == inputCore + outputElement)
+          assert(peek(c.io.outputMemBlocks(i)).toInt == outputBits(outputElement - 1))
         }
         step(1)
         poke(c.io.outputMemBlockReadys(i), false)
@@ -123,5 +126,15 @@ class StreamingWrapperTests(c: StreamingWrapper, linesPerChunk: Int) extends Pee
       }
     }
     step(1)
+  }
+  for (chan <- perCoreInputCounters) {
+    for (counter <- chan) {
+      assert(counter == inputLines + 1)
+    }
+  }
+  for (chan <- perCoreOutputCounters) {
+    for (counter <- chan) {
+      assert(counter == outputLines + 1)
+    }
   }
 }

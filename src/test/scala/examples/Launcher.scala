@@ -128,9 +128,9 @@ object Launcher {
       },
       "StreamingWrapper" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 16),
+          1000000000L), 4, 1, 1, 16, 1, () => new PassThrough(1)),
           backendName) {
-          (c) => new StreamingWrapperTests(c, 1)
+          (c) => new StreamingWrapperTests(c, 512, Array(BigInt(1)))
         }
       }
   )

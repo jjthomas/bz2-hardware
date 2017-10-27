@@ -1,10 +1,10 @@
 package examples
 
-import chisel3._
-
-class PassThrough(wordSize: Int) extends Module {
-  val io = IO(new ProcessingUnitIO(wordSize))
-
+class PassThrough(wordSize: Int) extends ProcessingUnit(wordSize) {
   io.outputWord := io.inputWord
   io.outputValid := io.inputValid
+
+  override def produceOutput(numBits: Int, bits: Array[BigInt]): (Int, Array[BigInt]) = {
+    (numBits, bits)
+  }
 }

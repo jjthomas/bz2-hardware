@@ -4,8 +4,7 @@ import chisel3._
 
 import scala.collection.mutable.ArrayBuffer
 
-class CsvFieldExtractor(numFields: Int, targetField: Int) extends Module {
-  val io = IO(new ProcessingUnitIO(8))
+class CsvFieldExtractor(numFields: Int, targetField: Int) extends ProcessingUnit(8) {
 
   def produceOutput(numBits: Int, bits: Array[BigInt]): (Int, Array[BigInt]) = {
     val input = Util.bitsToChars(numBits, bits)

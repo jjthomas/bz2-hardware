@@ -3,7 +3,7 @@ package examples
 import chisel3._
 import chisel3.core.{Reg, Bundle, Module}
 
-class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
+class InnerCore(bramWidth: Int, wordBits: Int, pu: ProcessingUnit) extends Module {
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new Bundle {
@@ -25,7 +25,7 @@ class InnerCore(bramWidth: Int, wordBits: Int) extends Module {
   })
   assert(wordBits <= bramWidth)
   assert(bramWidth % wordBits == 0)
-  val inner = Module(new PassThrough(wordBits))
+  val inner = Module(pu)
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
@@ -166,11 +166,11 @@ class StreamingCoreIO(bramWidth: Int) extends Bundle {
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
-class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int) extends Module {
+class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int, wordSize: Int, pu: ProcessingUnit) extends Module {
   val bramNumAddrs = 512 / bramWidth
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val io = IO(new StreamingCoreIO(bramWidth))
-  val core = Module(new InnerCore(bramWidth, 1))
+  val core = Module(new InnerCore(bramWidth, wordSize, pu))
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
@@ -339,7 +339,8 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int) extends Modu
 
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], numCores: Int, inputGroupSize: Int,
-                       outputGroupSize: Int, bramWidth: Int) extends Module {
+                       outputGroupSize: Int, bramWidth: Int, wordSize: Int,
+                       val puFactory: () => ProcessingUnit) extends Module {
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(numInputChannels, UInt(64.W)))
     val inputMemAddrValids = Output(Vec(numInputChannels, Bool()))
@@ -400,7 +401,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       curOutputChannel += 1
     }
     _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * 64, bramWidth, i))
+      (i - inputChannelBounds(curInputChannel)) * 64, bramWidth, i, wordSize, puFactory()))
   }
 
   val cores = VecInit(_cores.map(_.io))
@@ -740,5 +741,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
 object StreamingWrapperDriver extends App {
   chisel3.Driver.execute(args, () => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L,
-    1000000000L, 1000000000L), 512, 16, 16, 16))
+    1000000000L, 1000000000L), 512, 16, 16, 16, 8, () => new PassThrough(8)))
 }
