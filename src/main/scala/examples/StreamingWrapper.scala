@@ -341,7 +341,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, coreId: Int, wordSize: In
 }
 
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
-                       val outputChannelStartAddrs: Array[Long], numCores: Int, inputGroupSize: Int,
+                       val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
                        outputGroupSize: Int, bramWidth: Int, wordSize: Int,
                        val puFactory: (Int) => ProcessingUnit) extends Module {
   val io = IO(new Bundle {

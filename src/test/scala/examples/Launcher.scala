@@ -131,9 +131,11 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {
           (c) => {
-            val (numInputBits, inputBits) = Util.charsToBits("11,21112".toCharArray)
-            val (numOutputBits, outputBits) = Util.charsToBits("11".toCharArray)
-            new StreamingWrapperTests(c, numInputBits, inputBits, numOutputBits, outputBits)
+            val inputs = Array(Util.charsToBits("1111,21112".toCharArray), Util.charsToBits("1,21112".toCharArray),
+              Util.charsToBits("111,21112".toCharArray), Util.charsToBits("11,21112".toCharArray))
+            val outputs = Array(Util.charsToBits("1111".toCharArray), Util.charsToBits("1".toCharArray),
+              Util.charsToBits("111".toCharArray), Util.charsToBits("11".toCharArray))
+            new StreamingWrapperTests(c, inputs, outputs)
           }
         }
       }
