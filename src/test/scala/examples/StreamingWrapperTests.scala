@@ -30,7 +30,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
       val curLines = if (outputs(j)._1 > 0) (outputs(j)._1 - 1) / 512 + 1 else 0
       outputLines(i)(j - c.outputChannelBounds(i)) = curLines
       outputLinesCum(i)(j - c.outputChannelBounds(i)) = sum
-      sum += curLines
+      sum += curLines + 1 // extra 1 for output length block
     }
     outputLinesCum(i)(c.numCoresForOutputChannel(i)) = sum
   }
@@ -100,7 +100,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             assert(perCoreInputCounters(i)(inputCore) == 0)
             val (outputChannel, outputCore) = getOutputLocForInputLoc(i, inputCore)
             val outputAddr = c.outputChannelStartAddrs(outputChannel) +
-              64 * (outputLinesCum(outputChannel)(outputCore) + outputCore)
+              64 * outputLinesCum(outputChannel)(outputCore)
             val inputAddr = c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i) +
               64 * inputLinesCum(i)(inputCore)
             val memBlock = (((BigInt(outputAddr) << 64) | inputs(absoluteInputCore)._1) << 64) | inputAddr
@@ -136,14 +136,14 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
         val offset = curAddr - c.outputChannelStartAddrs(i)
         assert(offset % 64 == 0)
         val lineInChannel = offset / 64
-        assert(lineInChannel < outputLinesCum(i)(c.numCoresForOutputChannel(i)) + c.numCoresForOutputChannel(i))
+        assert(lineInChannel < outputLinesCum(i)(c.numCoresForOutputChannel(i)))
         var outputCore = 0
-        while (lineInChannel >= outputLinesCum(i)(outputCore) + outputCore) {
+        while (lineInChannel >= outputLinesCum(i)(outputCore)) {
           outputCore += 1
         }
         outputCore -= 1
         val absoluteOutputCore = outputCore + c.outputChannelBounds(i)
-        val outputElement = lineInChannel - (outputLinesCum(i)(outputCore) + outputCore)
+        val outputElement = lineInChannel - outputLinesCum(i)(outputCore)
         if (outputElement == 0) {
           assert(perCoreOutputCounters(i)(outputCore) == outputLines(i)(outputCore))
         } else {
