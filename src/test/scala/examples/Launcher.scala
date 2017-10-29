@@ -126,7 +126,47 @@ object Launcher {
           (c) => new InsertionSorterTests(c)
         }
       },
-      "StreamingWrapper" -> { (backendName: String) =>
+      "StreamingWrapper1" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          backendName) {
+          (c) => {
+            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 63).map(_ => i.toChar).toArray)).toArray
+            new StreamingWrapperTests(c, inputs, inputs)
+          }
+        }
+      },
+      "StreamingWrapper2" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          backendName) {
+          (c) => {
+            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 65).map(_ => i.toChar).toArray)).toArray
+            new StreamingWrapperTests(c, inputs, inputs)
+          }
+        }
+      },
+      "StreamingWrapper3" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 8, 2, 2, 16, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          backendName) {
+          (c) => {
+            val inputs = (0 until 8).map(i => Util.charsToBits((0 until 63).map(_ => i.toChar).toArray)).toArray
+            new StreamingWrapperTests(c, inputs, inputs)
+          }
+        }
+      },
+      "StreamingWrapper4" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 16, (coreId: Int) => new PassThrough(16, coreId)),
+          backendName) {
+          (c) => {
+            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 62).map(_ => i.toChar).toArray)).toArray
+            new StreamingWrapperTests(c, inputs, inputs)
+          }
+        }
+      },
+      "StreamingWrapper5" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
           1000000000L), 4, 1, 1, 16, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {

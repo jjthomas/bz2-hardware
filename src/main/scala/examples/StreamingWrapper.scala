@@ -41,7 +41,6 @@ class InnerCore(bramWidth: Int, wordBits: Int, puFactory: (Int) => ProcessingUni
   // inputReadAddr and outputWriteAddr must wrap back to 0 after their last value (valid address range must
   // be a power of two)
   val inputReadAddr = RegInit(0.asUInt(bramAddrBits.W))
-  val inputPieceRead = RegInit(false.B)
   val outputBram = Module(new DualPortBRAM(bramWidth, bramAddrBits))
   val outputWriteAddr = RegInit(0.asUInt(bramAddrBits.W))
   val outputReadAddr = RegInit(0.asUInt(bramAddrBits.W))
@@ -49,7 +48,7 @@ class InnerCore(bramWidth: Int, wordBits: Int, puFactory: (Int) => ProcessingUni
   inputBram.io.a_wr := io.inputMemBlockValid
   inputBram.io.a_addr := io.inputMemIdx
   inputBram.io.a_din := io.inputMemBlock
-  when (io.inputMemBlockValid && io.inputMemIdx === (bramNumAddrs - 1).U) {
+  when (io.inputMemBlockValid && io.inputMemIdx === 1.U) {
     inputBlockLoaded := true.B
     inputBitsRemaining := io.inputBits
   }
@@ -60,15 +59,10 @@ class InnerCore(bramWidth: Int, wordBits: Int, puFactory: (Int) => ProcessingUni
   inputBram.io.b_wr := false.B
   inputBram.io.b_addr := inputReadAddr
   when (inputBlockLoaded && inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) {
-    when (!inputPieceRead) {
-      inputPieceRead := true.B
-    } .otherwise {
-      inputPieceRead := false.B
-      inputPieceBitsRemaining := Mux(inputBitsRemaining < bramWidth.U, inputBitsRemaining, bramWidth.U)
-      inputReadAddr := inputReadAddr + 1.U
-      for (i <- 0 until bramWidth) {
-        inputMemBlock(i) := inputBram.io.b_dout(i)
-      }
+    inputPieceBitsRemaining := Mux(inputBitsRemaining < bramWidth.U, inputBitsRemaining, bramWidth.U)
+    inputReadAddr := inputReadAddr + 1.U // wraps around on final piece
+    for (i <- 0 until bramWidth) {
+      inputMemBlock(i) := inputBram.io.b_dout(i)
     }
   }
   val inputAdvance = Wire(Bool())
