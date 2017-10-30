@@ -91,6 +91,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
   while (peek(c.io.finished).toInt == 0) {
     for (i <- 0 until c.numInputChannels) {
       if (peek(c.io.inputMemAddrValids(i)).toInt == 1) {
+        assert(peek(c.io.inputMemAddrLens(i)).toInt == nativeLinesInLine - 1)
         step(1)
         poke(c.io.inputMemAddrReadys(i), true)
         val curAddr = peek(c.io.inputMemAddrs(i)).toLong
@@ -137,6 +138,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
     }
     for (i <- 0 until c.numOutputChannels) {
       if (peek(c.io.outputMemAddrValids(i)).toInt == 1) {
+        assert(peek(c.io.outputMemAddrLens(i)).toInt == nativeLinesInLine - 1)
         step(1)
         poke(c.io.outputMemAddrReadys(i), true)
         val curAddr = peek(c.io.outputMemAddrs(i)).toLong
@@ -165,6 +167,11 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
           while (peek(c.io.outputMemBlockValids(i)).toInt == 0) {
             step(1)
             poke(c.io.outputMemBlockReadys(i), true)
+          }
+          if (j == nativeLinesInLine - 1) {
+            assert(peek(c.io.outputMemBlockLasts(i)).toInt == 1)
+          } else {
+            assert(peek(c.io.outputMemBlockLasts(i)).toInt == 0)
           }
           outputLine = (peek(c.io.outputMemBlocks(i)) << (512 * j)) | outputLine
         }

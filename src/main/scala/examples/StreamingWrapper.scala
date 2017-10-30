@@ -360,6 +360,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val outputMemAddrReadys = Input(Vec(numOutputChannels, Bool()))
     val outputMemBlocks = Output(Vec(numOutputChannels, UInt(512.W)))
     val outputMemBlockValids = Output(Vec(numOutputChannels, Bool()))
+    val outputMemBlockLasts = Output(Vec(numOutputChannels, Bool()))
     val outputMemBlockReadys = Input(Vec(numOutputChannels, Bool()))
     val finished = Output(Bool())
   })
@@ -712,6 +713,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
     io.outputMemBlocks(i) := selectedOutputBlock
     io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutputBlock)
+    io.outputMemBlockLasts(i) := nativeLineCounter === (bramNumNativeLines - 1).U
     when ((treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutputAddr)) ||
       (io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
       (zerothCoreDelay && !outputMemAddrValid(groupCounterOutputAddr))) {
@@ -751,7 +753,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
         cores(k).outputMemBlockReady := Mux(curOutputCore(i) === j.U,
           groupCounterOutputBlock === (k - j * outputGroupSize).U && io.outputMemBlockValids(i)
-            && io.outputMemBlockReadys(i), false.B)
+            && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U, false.B)
       }
     }
 
