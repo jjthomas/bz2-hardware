@@ -6,6 +6,9 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
                             outputs: Array[(Int, Array[BigInt])]) extends PeekPokeTester(c) {
   assert(inputs.length == c.numCores)
   assert(outputs.length == c.numCores)
+  val bytesInLine = c.bramLineSize / 8
+  val nativeLinesInLine = c.bramLineSize / 512
+  val nativeLineMask = (BigInt(1) << 512) - 1
   val inputLines = new Array[Array[Int]](c.numInputChannels)
   val inputLinesCum = new Array[Array[Int]](c.numInputChannels)
   val outputLines = new Array[Array[Int]](c.numOutputChannels)
@@ -15,7 +18,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
     inputLinesCum(i) = new Array[Int](c.numCoresForInputChannel(i) + 1)
     var sum = 0
     for (j <- c.inputChannelBounds(i) until c.inputChannelBounds(i + 1)) {
-      val curLines = (inputs(j)._1 - 1) / 512 + 1
+      val curLines = (inputs(j)._1 - 1) / c.bramLineSize + 1
       inputLines(i)(j - c.inputChannelBounds(i)) = curLines
       inputLinesCum(i)(j - c.inputChannelBounds(i)) = sum
       sum += curLines
@@ -27,7 +30,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
     outputLinesCum(i) = new Array[Int](c.numCoresForOutputChannel(i) + 1)
     var sum = 0
     for (j <- c.outputChannelBounds(i) until c.outputChannelBounds(i + 1)) {
-      val curLines = if (outputs(j)._1 > 0) (outputs(j)._1 - 1) / 512 + 1 else 0
+      val curLines = if (outputs(j)._1 > 0) (outputs(j)._1 - 1) / c.bramLineSize + 1 else 0
       outputLines(i)(j - c.outputChannelBounds(i)) = curLines
       outputLinesCum(i)(j - c.outputChannelBounds(i)) = sum
       sum += curLines + 1 // extra 1 for output length block
@@ -93,24 +96,27 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
         val curAddr = peek(c.io.inputMemAddrs(i)).toLong
         println("valid input addr from channel: " + i + ", addr: " + curAddr)
         val pushedBlock =
-          if (curAddr < c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i)) {
-            assert((curAddr - c.inputChannelStartAddrs(i)) % 64 == 0)
-            val inputCore = (curAddr - c.inputChannelStartAddrs(i)) / 64
+          if (curAddr < c.inputChannelStartAddrs(i) + bytesInLine * c.numCoresForInputChannel(i)) {
+            assert((curAddr - c.inputChannelStartAddrs(i)) % bytesInLine == 0)
+            val inputCore = (curAddr - c.inputChannelStartAddrs(i)) / bytesInLine
             val absoluteInputCore = inputCore + c.inputChannelBounds(i)
             assert(perCoreInputCounters(i)(inputCore) == 0)
             val (outputChannel, outputCore) = getOutputLocForInputLoc(i, inputCore)
             val outputAddr = c.outputChannelStartAddrs(outputChannel) +
-              64 * outputLinesCum(outputChannel)(outputCore)
-            val inputAddr = c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i) +
-              64 * inputLinesCum(i)(inputCore)
+              bytesInLine * outputLinesCum(outputChannel)(outputCore)
+            val inputAddr = c.inputChannelStartAddrs(i) + bytesInLine * c.numCoresForInputChannel(i) +
+              bytesInLine * inputLinesCum(i)(inputCore)
             val memBlock = (((BigInt(outputAddr) << 64) | inputs(absoluteInputCore)._1) << 64) | inputAddr
             pushBlockToInputChannel(memBlock, i)
+            for (j <- 1 until nativeLinesInLine) {
+              pushBlockToInputChannel(BigInt(0), i)
+            }
             perCoreInputCounters(i)(inputCore) += 1
             memBlock
           } else {
-            val offset = curAddr - (c.inputChannelStartAddrs(i) + 64 * c.numCoresForInputChannel(i))
-            assert(offset % 64 == 0)
-            val lineInChannel = offset / 64
+            val offset = curAddr - (c.inputChannelStartAddrs(i) + bytesInLine * c.numCoresForInputChannel(i))
+            assert(offset % bytesInLine == 0)
+            val lineInChannel = offset / bytesInLine
             assert(lineInChannel < inputLinesCum(i)(c.numCoresForInputChannel(i)))
             var inputCore = 0
             while (lineInChannel >= inputLinesCum(i)(inputCore)) {
@@ -120,7 +126,9 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             val absoluteInputCore = inputCore + c.inputChannelBounds(i)
             val inputElement = lineInChannel - inputLinesCum(i)(inputCore)
             assert(inputElement == perCoreInputCounters(i)(inputCore) - 1)
-            pushBlockToInputChannel(inputs(absoluteInputCore)._2(inputElement), i)
+            for (j <- 0 until nativeLinesInLine) {
+              pushBlockToInputChannel((inputs(absoluteInputCore)._2(inputElement) >> (512 * j)) & nativeLineMask, i)
+            }
             perCoreInputCounters(i)(inputCore) += 1
             inputs(absoluteInputCore)._2(inputElement)
           }
@@ -134,8 +142,8 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
         val curAddr = peek(c.io.outputMemAddrs(i)).toLong
         println("valid output addr from channel: " + i + ", addr: " + curAddr)
         val offset = curAddr - c.outputChannelStartAddrs(i)
-        assert(offset % 64 == 0)
-        val lineInChannel = offset / 64
+        assert(offset % bytesInLine == 0)
+        val lineInChannel = offset / bytesInLine
         assert(lineInChannel < outputLinesCum(i)(c.numCoresForOutputChannel(i)))
         var outputCore = 0
         while (lineInChannel >= outputLinesCum(i)(outputCore)) {
@@ -149,28 +157,33 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
         } else {
           assert(perCoreOutputCounters(i)(outputCore) + 1 == outputElement)
         }
-        step(1)
-        poke(c.io.outputMemAddrReadys(i), false)
-        poke(c.io.outputMemBlockReadys(i), true)
-        while (peek(c.io.outputMemBlockValids(i)).toInt == 0) {
+        var outputLine = BigInt(0)
+        for (j <- 0 until nativeLinesInLine) {
           step(1)
+          poke(c.io.outputMemAddrReadys(i), false)
           poke(c.io.outputMemBlockReadys(i), true)
+          while (peek(c.io.outputMemBlockValids(i)).toInt == 0) {
+            step(1)
+            poke(c.io.outputMemBlockReadys(i), true)
+          }
+          outputLine = (peek(c.io.outputMemBlocks(i)) << (512 * j)) | outputLine
         }
         val mask =
           if (outputElement == 0) {
             (BigInt(1) << 32) - 1
-          } else if (outputElement == outputLines(i)(outputCore) && outputs(absoluteOutputCore)._1 % 512 > 0) {
-            (BigInt(1) << (outputs(absoluteOutputCore)._1 % 512)) - 1
+          } else if (outputElement == outputLines(i)(outputCore) &&
+            outputs(absoluteOutputCore)._1 % c.bramLineSize > 0) {
+            (BigInt(1) << (outputs(absoluteOutputCore)._1 % c.bramLineSize)) - 1
           } else {
-            (BigInt(1) << 512) - 1
+            (BigInt(1) << c.bramLineSize) - 1
           }
         println("read valid output element from channel: " + i + ", element: " +
-          (peek(c.io.outputMemBlocks(i)) & mask).toString(16))
+          (outputLine & mask).toString(16))
         if (outputElement == 0) {
-          assert(peek(c.io.outputMemBlocks(i)).toInt == outputs(absoluteOutputCore)._1)
+          assert(outputLine.toInt == outputs(absoluteOutputCore)._1)
         } else {
           val (_, inputCore) = getInputLocForOutputLoc(i, outputCore)
-          assert((peek(c.io.outputMemBlocks(i)) & mask) == (outputs(absoluteOutputCore)._2(outputElement - 1) & mask))
+          assert((outputLine & mask) == (outputs(absoluteOutputCore)._2(outputElement - 1) & mask))
         }
         step(1)
         poke(c.io.outputMemBlockReadys(i), false)
