@@ -36,8 +36,6 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   val outputMemBlock = Reg(Vec(bramWidth, Bool()))
   val outputBits = RegInit(0.asUInt(util.log2Ceil(bramLineSize + 1).W))
   val outputPieceBits = RegInit(0.asUInt(util.log2Ceil(bramWidth + 1).W))
-  // TODO make BRAM width configurable throughout circuit
-  // TODO starting reading from inputBram before writes are complete, especially for byte-wise ops
   val inputBram = Module(new DualPortBRAM(bramWidth, bramAddrBits))
   // inputReadAddr and outputWriteAddr must wrap back to 0 after their last value (valid address range must
   // be a power of two)
@@ -66,9 +64,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
       inputMemBlock(i) := inputBram.io.b_dout(i)
     }
   }
-  val inputAdvance = Wire(Bool())
-  inputAdvance := outputPieceBits =/= bramWidth.U && !(outputBits === bramLineSize.U) && !(inputPieceBitsRemaining === 0.U)
-  when (inputAdvance) {
+  when (inner.io.inputValid && inner.io.inputReady) {
     inputPieceBitsRemaining := inputPieceBitsRemaining - wordBits.U
     inputBitsRemaining := inputBitsRemaining - wordBits.U
     for (i <- 0 until (bramWidth - wordBits)) {
@@ -82,11 +78,12 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     } else {
       inputMemBlock.asUInt()(wordBits - 1, 0)
     }
-  inner.io.inputValid := inputAdvance
-  inner.io.lastInputWord := io.inputFinished && (inputBitsRemaining - wordBits.U === 0.U)
+  inner.io.inputValid := !(inputPieceBitsRemaining === 0.U)
+  inner.io.inputFinished := io.inputFinished && inputBitsRemaining === 0.U
   inner.io.inputWord := nextWord
+  inner.io.outputReady := !(outputBits === bramLineSize.U)
   // outputValid must be asserted on the same cycle as inputValid if that input triggered the output
-  when (inner.io.outputValid || (io.inputFinished && inputBitsRemaining === 0.U && outputPieceBits > 0.U &&
+  when ((inner.io.outputValid && inner.io.outputReady) || (inner.io.outputFinished && outputPieceBits > 0.U &&
     outputPieceBits < bramWidth.U)) {
     for (i <- 0 until wordBits) {
       outputMemBlock(bramWidth - 1 - i) := inner.io.outputWord(wordBits - 1 - i)
@@ -94,7 +91,8 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     for (i <- 0 until (bramWidth - wordBits)) {
       outputMemBlock(i) := outputMemBlock(i + wordBits)
     }
-    outputPieceBits := outputPieceBits + wordBits.U
+    outputPieceBits := Mux(outputPieceBits === bramWidth.U, wordBits.U, outputPieceBits + wordBits.U)
+    outputWriteAddr := Mux(outputPieceBits === bramWidth.U, outputWriteAddr + 1.U, outputWriteAddr)
     when (inner.io.outputValid) {
       outputBits := outputBits + wordBits.U
     }
@@ -103,10 +101,6 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   outputBram.io.a_wr := outputPieceBits === bramWidth.U
   outputBram.io.a_addr := outputWriteAddr
   outputBram.io.a_din := outputMemBlock.asUInt
-  when (outputPieceBits === bramWidth.U) {
-    outputPieceBits := 0.U
-    outputWriteAddr := outputWriteAddr + 1.U
-  }
 
   val outputReadingStartedPrev = RegInit(false.B) // needed to make sure we don't start reading BRAM address 0
   // on the same cycle it is written in the case of a single-word final output block
@@ -114,8 +108,8 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   outputBram.io.b_wr := false.B
   outputBram.io.b_addr := outputReadAddr
   when (!outputReadingStartedPrev &&
-    (outputBits === bramLineSize.U || (io.inputFinished && inputBitsRemaining === 0.U && outputBits > 0.U &&
-      (outputPieceBits === bramWidth.U || outputPieceBits === 0.U)))) {
+    (outputBits === bramLineSize.U || (inner.io.outputFinished && outputBits > 0.U &&
+      outputPieceBits === bramWidth.U))) {
     outputReadingStartedPrev := true.B
   }
   when (outputReadingStartedPrev && !outputReadingStarted) {
@@ -123,17 +117,19 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   }
   when (io.outputMemBlockReady && outputReadingStarted && outputReadAddr =/= (bramNumAddrs - 1).U) {
     outputReadAddr := outputReadAddr + 1.U
+    when (outputReadAddr === 0.U) {
+      outputBits := 0.U // allow new output bits to be written into the output BRAM right away
+    }
   }
   io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
   io.outputMemBlockValid := outputReadingStarted
   io.outputMemBlock := outputBram.io.b_dout
   io.outputBits := outputBits
-  io.outputFinished := io.inputFinished && inputBitsRemaining === 0.U && outputBits === 0.U
+  io.outputFinished := inner.io.outputFinished && outputBits === 0.U && outputReadAddr === 0.U // last term needed
+  // so that this signal is only asserted after outputMemFlushed signaled for last block
   when (io.outputMemFlushed) {
-    outputBits := 0.U
     outputReadingStartedPrev := false.B
     outputReadingStarted := false.B
-    outputWriteAddr := 0.U
     outputReadAddr := 0.U
   }
 }
@@ -303,6 +299,9 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   when (io.outputMemAddrValid && io.outputMemAddrReady) {
     printf(p"output address 0x${Hexadecimal(io.outputMemAddr)} accepted for core $coreId\n")
     outputAddressAccepted := true.B
+    when (!core.io.outputFinished) {
+      outputBits := outputBits + core.io.outputBits
+    }
   }
   core.io.outputMemBlockReady := outputAddressAccepted
   when (outputAddressAcceptedNext) {
@@ -327,14 +326,13 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
 
   io.outputMemBlockValid := outputAddressAcceptedNext
   core.io.outputMemFlushed := outputAddressAcceptedNext && io.outputMemBlockReady
-  when (outputAddressAcceptedNext && io.outputMemBlockReady && outputBlockCounter === (bramNumAddrs - 1).U) {
+  when (outputAddressAcceptedNext && io.outputMemBlockReady) {
     outputAddressAccepted := false.B
     outputAddressAcceptedNext := false.B
     // TODO make sure outputFinished can't be set until a cycle after outputMemFlushed is asserted
     when (core.io.outputFinished) {
       outputLengthCommitted := true.B
     } .otherwise {
-      outputBits := outputBits + core.io.outputBits
       outputMemAddr := outputMemAddr + bytesInLine.U
     }
   }
@@ -752,8 +750,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize) &&
           (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
         cores(k).outputMemBlockReady := Mux(curOutputCore(i) === j.U,
-          groupCounterOutputBlock === (k - j * outputGroupSize).U && io.outputMemBlockValids(i)
-            && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U, false.B)
+          groupCounterOutputBlock === (k - j * outputGroupSize).U && (io.outputMemBlockValids(i)
+            && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U), false.B)
       }
     }
 

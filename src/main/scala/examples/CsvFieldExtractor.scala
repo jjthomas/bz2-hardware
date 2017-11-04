@@ -43,6 +43,9 @@ class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends P
   // output
   io.outputWord := io.inputWord
   io.outputValid := io.inputValid && curField === targetField.U && curFieldNext === targetField.U
+  // (standard outputs for processing units that can only produce valid output on a cycle where input is valid)
+  io.outputFinished := io.inputFinished
+  io.inputReady := io.outputReady
 
   // commit new states
   when (io.inputValid) {

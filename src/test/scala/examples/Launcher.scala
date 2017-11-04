@@ -141,7 +141,7 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 65).map(_ => i.toChar).toArray, 512)).toArray
+            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 67).map(_ => i.toChar).toArray, 512)).toArray
             new StreamingWrapperTests(c, inputs, inputs)
           }
         }
