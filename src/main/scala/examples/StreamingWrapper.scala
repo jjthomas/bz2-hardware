@@ -49,24 +49,41 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   inputBram.io.a_din := io.inputMemBlock
   when (io.inputMemBlockValid && io.inputMemIdx === 1.U) {
     inputBlockLoaded := true.B
+    inputPieceBitsRemaining := wordBits.U
     inputBitsRemaining := io.inputBits
   }
   when (inputBlockLoaded && inputBitsRemaining === 0.U) {
     inputBlockLoaded := false.B
+    inputReadAddr := 0.U
   }
 
   inputBram.io.b_wr := false.B
   inputBram.io.b_addr := inputReadAddr
-  when (inputBlockLoaded && inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) {
-    inputPieceBitsRemaining := Mux(inputBitsRemaining < bramWidth.U, inputBitsRemaining, bramWidth.U)
-    inputReadAddr := inputReadAddr + 1.U // wraps around on final piece
+  val pieceCompleteCondition =
+    if (bramWidth == wordBits) {
+      inputPieceBitsRemaining === 0.U
+    } else {
+      inputReadAddr === 0.U ||
+        (inner.io.inputReady && ((inputPieceBitsRemaining - wordBits.U) === 0.U)) // inner.io.inputValid is implied
+    }
+  when (inputBlockLoaded && pieceCompleteCondition && !(inputBitsRemaining === 0.U)) {
+    val newInputBitsRemaining = Mux(inputReadAddr === 0.U, inputBitsRemaining,
+        Mux(inputBitsRemaining < bramWidth.U, 0.U, inputBitsRemaining - bramWidth.U))
+    inputBitsRemaining := newInputBitsRemaining
+    inputPieceBitsRemaining := Mux(newInputBitsRemaining < bramWidth.U, newInputBitsRemaining, bramWidth.U)
+    inputReadAddr := Mux(inputReadAddr === (bramNumAddrs - 1).U, inputReadAddr, inputReadAddr + 1.U)
     for (i <- 0 until bramWidth) {
       inputMemBlock(i) := inputBram.io.b_dout(i)
     }
   }
-  when (inner.io.inputValid && inner.io.inputReady) {
+  val pieceProgressCondition =
+    if (bramWidth == wordBits) {
+      !(inputPieceBitsRemaining === 0.U)
+    } else {
+      inner.io.inputValid && !((inputPieceBitsRemaining - wordBits.U) === 0.U)
+    }
+  when (inner.io.inputReady && pieceProgressCondition) {
     inputPieceBitsRemaining := inputPieceBitsRemaining - wordBits.U
-    inputBitsRemaining := inputBitsRemaining - wordBits.U
     for (i <- 0 until (bramWidth - wordBits)) {
       inputMemBlock(i) := inputMemBlock(i + wordBits)
     }
@@ -78,7 +95,13 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     } else {
       inputMemBlock.asUInt()(wordBits - 1, 0)
     }
-  inner.io.inputValid := !(inputPieceBitsRemaining === 0.U)
+  val validCondition =
+    if (bramWidth == wordBits) {
+      !(inputPieceBitsRemaining === 0.U)
+    } else {
+      !(inputBitsRemaining === 0.U) && !(inputReadAddr === 0.U)
+    }
+  inner.io.inputValid := validCondition
   inner.io.inputFinished := io.inputFinished && inputBitsRemaining === 0.U
   inner.io.inputWord := nextWord
   inner.io.outputReady := !(outputBits === bramLineSize.U)
