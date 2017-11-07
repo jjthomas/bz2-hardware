@@ -147,11 +147,11 @@ object Launcher {
         }
       },
       "StreamingWrapper3" -> { (backendName: String) =>
-        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 8, 2, 2, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
+        Driver(() => new StreamingWrapper(2, Array(0L, 0L), 2, Array(1000000000L, 1000000000L),
+          8, 2, 2, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 8).map(i => Util.charsToBits((0 until 63).map(_ => i.toChar).toArray, 512)).toArray
+            val inputs = (0 until 8).map(i => Util.charsToBits((0 until 67).map(_ => i.toChar).toArray, 512)).toArray
             new StreamingWrapperTests(c, inputs, inputs)
           }
         }

@@ -138,11 +138,10 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
 
   val inputMemAddr = Output(UInt(32.W))
-  val inputMemAddrConsumed = Input(Bool())
+  val inputMemAddrValid = Output(Bool())
   val inputMemBlock = Input(UInt(bramWidth.W))
   val inputMemIdx = Input(UInt(bramAddrBits.W))
   val inputMemBlockValid = Input(Bool())
-  val inputMemBlockReady = Output(Bool())
   val outputMemAddr = Output(UInt(32.W))
   val outputMemAddrValid = Output(Bool())
   val outputMemAddrReady = Input(Bool())
@@ -150,8 +149,6 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
   val outputMemIdx = Output(UInt(bramAddrBits.W))
   val outputMemBlockValid = Output(Bool())
   val outputMemBlockReady = Input(Bool())
-  val inputAddrsIgnore = Output(Bool())
-  val inputBlocksFinished = Output(Bool())
   val outputFinished = Output(Bool())
 
   override def cloneType(): this.type = new StreamingCoreIO(bramWidth, bramNumAddrs).asInstanceOf[this.type]
@@ -159,8 +156,7 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
 
 // TODO current limitation: all addresses must be 512-bit aligned
 class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSize: Int,
-                    puFactory: (Int) => ProcessingUnit, coreId: Int)
-  extends Module {
+                    puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val bramLineSize = bramWidth * bramNumAddrs
   val bytesInLine = bramLineSize / 8
@@ -175,26 +171,13 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   val outputBlockCounter = RegInit(0.asUInt(bramAddrBits.W))
   val outputLengthCommitted = RegInit(false.B)
   val inputMemAddr = RegInit(metadataPtr.asUInt(32.W))
-  val inputMemBound = Reg(UInt(32.W))
   val outputMemAddr = Reg(UInt(32.W))
   val outputLenAddr = Reg(UInt(32.W))
   val outputMemFlushed = RegInit(false.B)
 
   io.inputMemAddr := inputMemAddr
-  when (io.inputMemAddrConsumed && !io.inputAddrsIgnore) {
-    printf(p"input address 0x${Hexadecimal(io.inputMemAddr)} accepted for core $coreId\n")
-  }
-  val initAddressAcked = RegInit(false.B)
-  when (io.inputMemAddrConsumed) {
-    initAddressAcked := true.B
-  }
-  when (io.inputMemAddrConsumed && initDone) {
-    inputMemAddr := inputMemAddr + bytesInLine.U
-  }
-
-  io.inputAddrsIgnore := (isInit && initAddressAcked) || (initDone && inputMemAddr === inputMemBound)
   // TODO with some changes to the StreamingWrapper the inputBitsRemaining === 0.U check may not be needed
-  io.inputMemBlockReady := isInit || (initDone && core.io.inputMemConsumed && !(inputBitsRemaining === 0.U))
+  io.inputMemAddrValid := isInit || (initDone && core.io.inputMemConsumed && !(inputBitsRemaining === 0.U))
   core.io.inputMemBlock := io.inputMemBlock
   core.io.inputMemIdx := io.inputMemIdx
   core.io.inputMemBlockValid := io.inputMemBlockValid && initDone
@@ -225,15 +208,6 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
           when (io.inputMemIdx === i.U) {
             val result = io.inputMemBlock(95 - startBit, 64 - startBit)
             inputBitsRemaining := result
-            if (startBit <= 0) {
-              inputMemBound := io.inputMemBlock(31, 0) +
-                result(31, util.log2Ceil(bramLineSize))##0.asUInt(util.log2Ceil(bytesInLine).W) +
-                Mux(result(util.log2Ceil(bramLineSize) - 1, 0) =/= 0.U, bytesInLine.U, 0.U)
-            } else {
-              inputMemBound := inputMemAddr +
-                result(31, util.log2Ceil(bramLineSize))##0.asUInt(util.log2Ceil(bytesInLine).W) +
-                Mux(result(util.log2Ceil(bramLineSize) - 1, 0) =/= 0.U, bytesInLine.U, 0.U)
-            }
           }
         } else if (startBit >= 64 && endBit <= 95) {
           when (io.inputMemIdx === i.U) {
@@ -247,9 +221,6 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
               inputBitsRemaining(31, endBitOffset + 1)##io.inputMemBlock##inputBitsRemaining(startBitOffset - 1, 0)
             }
             inputBitsRemaining := result
-            inputMemBound := inputMemAddr +
-              result(31, util.log2Ceil(bramLineSize))##0.asUInt(util.log2Ceil(bytesInLine).W) +
-              Mux(result(util.log2Ceil(bramLineSize) - 1, 0) =/= 0.U, bytesInLine.U, 0.U)
           }
         }
         if (startBit <= 128 && endBit >= 159) {
@@ -281,10 +252,10 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
     } .otherwise {
       when (io.inputMemIdx === (bramNumAddrs - 1).U) {
         inputBitsRemaining := Mux(inputBitsRemaining > bramLineSize.U, inputBitsRemaining - bramLineSize.U, 0.U)
+        inputMemAddr := inputMemAddr + bytesInLine.U
       }
     }
   }
-  io.inputBlocksFinished := initDone && inputBitsRemaining === 0.U
   core.io.inputFinished := initDone && inputBitsRemaining === 0.U
 
   val outputAddressAccepted = RegInit(false.B)
@@ -297,7 +268,6 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   io.outputMemAddrValid := !outputAddressAccepted && (core.io.outputMemBlockValid ||
     (core.io.outputFinished && !outputLengthCommitted))
   when (io.outputMemAddrValid && io.outputMemAddrReady) {
-    printf(p"output address 0x${Hexadecimal(io.outputMemAddr)} accepted for core $coreId\n")
     outputAddressAccepted := true.B
     when (!core.io.outputFinished) {
       outputBits := outputBits + core.io.outputBits
@@ -378,7 +348,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val bramAddrsPerNativeLine = 512 / bramWidth
 
   val _cores = new Array[StreamingCore](numCores)
-  val curInputAddrCore = new Array[UInt](numInputChannels)
   val curInputBlockCore = new Array[UInt](numInputChannels)
   val curOutputCore = new Array[UInt](numOutputChannels)
 
@@ -416,8 +385,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val cores = VecInit(_cores.map(_.io))
 
   for (i <- 0 until numInputChannels) {
-    curInputAddrCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
-      .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
     curInputBlockCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
       .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
   }
@@ -428,19 +395,16 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
   var inputTreeLevel = 0
   val selInputMemAddr = new Array[Vec[UInt]](numInputChannels)
-  val selInputMemBlockReady = new Array[Vec[Bool]](numInputChannels)
-  val selInputAddrsIgnore = new Array[Vec[Bool]](numInputChannels)
-  val selInputBlocksFinished = new Array[Vec[Bool]](numInputChannels)
+  val selInputMemAddrValid = new Array[Vec[Bool]](numInputChannels)
   for (chan <- 0 until numInputChannels) {
-    var curTreeLevel = new Array[Array[(UInt, Bool, Bool, Bool)]](Math.pow(2, util.log2Ceil(numCores)).toInt
+    var curTreeLevel = new Array[Array[(UInt, Bool)]](Math.pow(2, util.log2Ceil(numCores)).toInt
       / inputGroupSize)
     for (i <- 0 until curTreeLevel.length) {
       val coreIndex = i * inputGroupSize
       if (coreIndex >= inputChannelBounds(chan) && coreIndex < inputChannelBounds(chan + 1)) {
-        val curGroup = new Array[(UInt, Bool, Bool, Bool)](inputGroupSize)
+        val curGroup = new Array[(UInt, Bool)](inputGroupSize)
         for (j <- coreIndex until coreIndex + inputGroupSize) {
-          curGroup(j - coreIndex) = (cores(j).inputMemAddr, cores(j).inputMemBlockReady,
-            cores(j).inputAddrsIgnore, cores(j).inputBlocksFinished)
+          curGroup(j - coreIndex) = (cores(j).inputMemAddr, cores(j).inputMemAddrValid)
         }
         curTreeLevel(i) = curGroup
       } else {
@@ -449,40 +413,29 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
     inputTreeLevel = 0
     while (curTreeLevel.length > 1) {
-      val newTreeLevel = new Array[Array[(UInt, Bool, Bool, Bool)]](curTreeLevel.length / 2)
+      val newTreeLevel = new Array[Array[(UInt, Bool)]](curTreeLevel.length / 2)
       for (i <- 0 until curTreeLevel.length by 2) {
         if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
           newTreeLevel(i / 2) = null
         } else {
-          newTreeLevel(i / 2) = new Array[(UInt, Bool, Bool, Bool)](inputGroupSize)
+          newTreeLevel(i / 2) = new Array[(UInt, Bool)](inputGroupSize)
           for (j <- 0 until inputGroupSize) {
             // TODO make use of registers configurable (e.g. every other tree level, every 4, etc.)
             val curInputMemAddr = Reg(UInt(32.W))
-            val curInputMemBlockReady = Reg(Bool())
-            val curInputAddrsIgnore = Reg(Bool())
-            val curInputBlocksFinished = Reg(Bool())
+            val curInputMemAddrValid = Reg(Bool())
             if (curTreeLevel(i) == null) {
               curInputMemAddr := curTreeLevel(i + 1)(j)._1
-              curInputMemBlockReady := curTreeLevel(i + 1)(j)._2
-              curInputAddrsIgnore := curTreeLevel(i + 1)(j)._3
-              curInputBlocksFinished := curTreeLevel(i + 1)(j)._4
+              curInputMemAddrValid := curTreeLevel(i + 1)(j)._2
             } else if (curTreeLevel(i + 1) == null) {
               curInputMemAddr := curTreeLevel(i)(j)._1
-              curInputMemBlockReady := curTreeLevel(i)(j)._2
-              curInputAddrsIgnore := curTreeLevel(i)(j)._3
-              curInputBlocksFinished := curTreeLevel(i)(j)._4
+              curInputMemAddrValid := curTreeLevel(i)(j)._2
             } else {
-              curInputMemAddr := Mux(curInputAddrCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddr := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._1, curTreeLevel(i)(j)._1)
-              curInputMemBlockReady := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddrValid := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._2, curTreeLevel(i)(j)._2)
-              curInputAddrsIgnore := Mux(curInputAddrCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
-                curTreeLevel(i + 1)(j)._3, curTreeLevel(i)(j)._3)
-              curInputBlocksFinished := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
-                curTreeLevel(i + 1)(j)._4, curTreeLevel(i)(j)._4)
             }
-            newTreeLevel(i / 2)(j) = (curInputMemAddr, curInputMemBlockReady, curInputAddrsIgnore,
-              curInputBlocksFinished)
+            newTreeLevel(i / 2)(j) = (curInputMemAddr, curInputMemAddrValid)
           }
         }
       }
@@ -490,9 +443,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       inputTreeLevel += 1
     }
     selInputMemAddr(chan) = VecInit(curTreeLevel(0).map(_._1))
-    selInputMemBlockReady(chan) = VecInit(curTreeLevel(0).map(_._2))
-    selInputAddrsIgnore(chan) = VecInit(curTreeLevel(0).map(_._3))
-    selInputBlocksFinished(chan) = VecInit(curTreeLevel(0).map(_._4))
+    selInputMemAddrValid(chan) = VecInit(curTreeLevel(0).map(_._2))
   }
 
   // TODO massive code duplication here
@@ -580,65 +531,34 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   }
 
   for (i <- 0 until numInputChannels) {
-    val treeCycleCounterInputAddrs = RegInit(0.asUInt(util.log2Ceil(inputTreeLevel + 1).W))
-    when (treeCycleCounterInputAddrs =/= inputTreeLevel.U) {
-      treeCycleCounterInputAddrs := treeCycleCounterInputAddrs + 1.U
-    }
-    val groupCounterInputAddrs = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
-    when (treeCycleCounterInputAddrs === inputTreeLevel.U && (io.inputMemAddrReadys(i) ||
-      selInputAddrsIgnore(i)(groupCounterInputAddrs))) {
-      when (groupCounterInputAddrs === (inputGroupSize - 1).U) {
-        curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-          (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
-        treeCycleCounterInputAddrs := 0.U
-        groupCounterInputAddrs := 0.U
-      } .otherwise {
-        groupCounterInputAddrs := groupCounterInputAddrs + 1.U
-      }
-    }
-    // TODO potentially increase transaction size now that we have BRAM buffers and/or allow out-of-order transactions
-    io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddrs)
-    io.inputMemAddrValids(i) := treeCycleCounterInputAddrs === inputTreeLevel.U &&
-      !selInputAddrsIgnore(i)(groupCounterInputAddrs)
-    io.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
-
-    val treeCycleCounterInputBlocks = RegInit(0.asUInt(util.log2Ceil(inputTreeLevel + 1).W))
-    when (treeCycleCounterInputBlocks =/= inputTreeLevel.U) {
-      treeCycleCounterInputBlocks := treeCycleCounterInputBlocks + 1.U
+    val treeCycleCounterInput = RegInit(0.asUInt(util.log2Ceil(inputTreeLevel + 1).W))
+    when (!(treeCycleCounterInput === inputTreeLevel.U)) {
+      treeCycleCounterInput := treeCycleCounterInput + 1.U
     }
     val inputBuffer = Reg(Vec(inputGroupSize, Vec(bramNumAddrs, UInt(bramWidth.W))))
     val inputBufferIdx = RegInit(VecInit((0 until inputGroupSize).map(_ => 0.asUInt(bramAddrBits.W))))
     val inputBufferValid = RegInit(VecInit((0 until inputGroupSize).map(_ => false.B)))
-    val groupCounterInputBlocks = RegInit(0.asUInt(util.log2Ceil(inputGroupSize + 1).W))
+    val groupCounterInputAddr = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
+    val addrsComplete = RegInit(false.B)
+    val groupCounterInputBlock = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
+    val blocksComplete = RegInit(false.B)
     val nativeLineCounter = RegInit(0.asUInt(util.log2Ceil(Math.max(bramNumNativeLines, 2)).W))
-
-    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
-      nativeLineCounter := Mux(nativeLineCounter === (bramNumNativeLines - 1).U, 0.U, nativeLineCounter + 1.U)
-      for (j <- 0 until bramNumAddrs) {
-        when ((j / bramAddrsPerNativeLine).U === nativeLineCounter) {
-          inputBuffer(groupCounterInputBlocks)(j) := io.inputMemBlocks(i)(((j % bramAddrsPerNativeLine) + 1) *
-            bramWidth - 1, (j % bramAddrsPerNativeLine) * bramWidth)
-        }
+    val zerothCoreDelay = RegInit(false.B) // give zeroth core in group one cycle to produce valid address
+    when (treeCycleCounterInput === inputTreeLevel.U && !zerothCoreDelay) {
+      zerothCoreDelay := true.B
+    }
+    io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
+    io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeLevel.U &&
+      selInputMemAddrValid(i)(groupCounterInputAddr) && !addrsComplete
+    io.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
+    when ((io.inputMemAddrValids(i) && io.inputMemAddrReadys(i)) ||
+      (zerothCoreDelay && !selInputMemAddrValid(i)(groupCounterInputAddr))) {
+      when (groupCounterInputAddr === (inputGroupSize - 1).U) {
+        addrsComplete := true.B
+      } .otherwise {
+        groupCounterInputAddr := groupCounterInputAddr + 1.U
       }
     }
-    when ((io.inputMemBlockReadys(i) && io.inputMemBlockValids(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
-          || (treeCycleCounterInputBlocks === inputTreeLevel.U && !(groupCounterInputBlocks === inputGroupSize.U) &&
-              selInputBlocksFinished(i)(groupCounterInputBlocks))) {
-      inputBufferValid(groupCounterInputBlocks) := !selInputBlocksFinished(i)(groupCounterInputBlocks)
-      groupCounterInputBlocks := groupCounterInputBlocks + 1.U
-    }
-    when (groupCounterInputBlocks === inputGroupSize.U && inputBufferValid.asUInt === 0.U) {
-      curInputBlockCore(i) := Mux(curInputBlockCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-        (inputChannelBounds(i) / inputGroupSize).U, curInputBlockCore(i) + 1.U)
-      treeCycleCounterInputBlocks := 0.U
-      groupCounterInputBlocks := 0.U
-    }
-    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
-      // TODO this concat doesn't produce the core number when groupCounterInputBlocks has only one value
-      printf(p"inputBuffer: 0x${Hexadecimal(io.inputMemBlocks(i))} for core " +
-        p"${curInputBlockCore(i)##groupCounterInputBlocks}, channel $i\n")
-    }
-
     for (j <- 0 until inputGroupSize) {
       when(inputBufferValid(j)) {
         when(inputBufferIdx(j) === (bramNumAddrs - 1).U) {
@@ -649,21 +569,58 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         }
       }
     }
-    // TODO make sure it's fine for this to be asserted even after the block is read
-    io.inputMemBlockReadys(i) := treeCycleCounterInputBlocks === inputTreeLevel.U &&
-      !(groupCounterInputBlocks === inputGroupSize.U) &&
-      selInputMemBlockReady(i)(groupCounterInputBlocks) && !selInputBlocksFinished(i)(groupCounterInputBlocks)
-
+    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
+      nativeLineCounter := Mux(nativeLineCounter === (bramNumNativeLines - 1).U, 0.U, nativeLineCounter + 1.U)
+      for (j <- 0 until bramNumAddrs) {
+        when ((j / bramAddrsPerNativeLine).U === nativeLineCounter) {
+          inputBuffer(groupCounterInputBlock)(j) := io.inputMemBlocks(i)(((j % bramAddrsPerNativeLine) + 1) *
+            bramWidth - 1, (j % bramAddrsPerNativeLine) * bramWidth)
+        }
+      }
+    }
+    when (blocksComplete && inputBufferValid.asUInt === 0.U) {
+      curInputBlockCore(i) := Mux(curInputBlockCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
+        (inputChannelBounds(i) / inputGroupSize).U, curInputBlockCore(i) + 1.U)
+      treeCycleCounterInput := 0.U
+      groupCounterInputBlock := 0.U
+      groupCounterInputAddr := 0.U
+      addrsComplete := false.B
+      blocksComplete := false.B
+      zerothCoreDelay := false.B
+    }
+    when ((io.inputMemBlockValids(i) && io.inputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
+      || (!selInputMemAddrValid(i)(groupCounterInputBlock) &&
+          (groupCounterInputBlock < groupCounterInputAddr || addrsComplete))) {
+      when (selInputMemAddrValid(i)(groupCounterInputBlock)) {
+        inputBufferValid(groupCounterInputBlock) := true.B
+      }
+      when (groupCounterInputBlock === (inputGroupSize - 1).U) {
+        blocksComplete := true.B
+      } .otherwise {
+        groupCounterInputBlock := groupCounterInputBlock + 1.U
+      }
+    }
+    // TODO do we need inputMemBlockReady signal from core?
+    io.inputMemBlockReadys(i) :=
+      treeCycleCounterInput === inputTreeLevel.U && selInputMemAddrValid(i)(groupCounterInputBlock) && !blocksComplete
     for (j <- inputChannelBounds(i) / inputGroupSize until inputChannelBounds(i + 1) / inputGroupSize) {
       for (k <- j * inputGroupSize until (j + 1) * inputGroupSize) {
-        cores(k).inputMemAddrConsumed := Mux(curInputAddrCore(i) === j.U,
-          groupCounterInputAddrs === (k - j * inputGroupSize).U && io.inputMemAddrReadys(i) &&
-            io.inputMemAddrValids(i), false.B)
         cores(k).inputMemBlock := inputBuffer(k - j * inputGroupSize)(inputBufferIdx(k - j * inputGroupSize))
         cores(k).inputMemIdx := inputBufferIdx(k - j * inputGroupSize)
         cores(k).inputMemBlockValid := Mux(curInputBlockCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
           false.B)
       }
+    }
+
+    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
+      // TODO this concat might not work, see above
+      printf(p"inputBuffer: 0x${Hexadecimal(io.inputMemBlocks(i))} for core " +
+        p"${curInputBlockCore(i)##groupCounterInputBlock}, channel $i\n")
+    }
+    when (io.inputMemAddrReadys(i) && io.inputMemAddrValids(i)) {
+      // TODO this concat might not work, see above
+      printf(p"input address: 0x${Hexadecimal(io.inputMemAddrs(i))} accepted for core " +
+        p"${curInputBlockCore(i)##groupCounterInputAddr}, channel $i\n")
     }
   }
 
@@ -759,6 +716,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       // TODO this concat might not work, see above
       printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core " +
         p"${curOutputCore(i)##groupCounterOutputBlock}, channel $i\n")
+    }
+    when (io.outputMemAddrReadys(i) && io.outputMemAddrValids(i)) {
+      // TODO this concat might not work, see above
+      printf(p"output address: 0x${Hexadecimal(io.outputMemAddrs(i))} accepted for core " +
+        p"${curOutputCore(i)##groupCounterOutputAddr}, channel $i\n")
     }
   }
   var cumFinished = cores(0).outputFinished
