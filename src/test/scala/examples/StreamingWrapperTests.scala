@@ -96,10 +96,11 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
         poke(c.io.inputMemAddrReadys(i), true)
         val curAddr = peek(c.io.inputMemAddrs(i)).toLong
         println("valid input addr from channel: " + i + ", addr: " + curAddr)
+        var inputCore = 0
         val pushedBlock =
           if (curAddr < c.inputChannelStartAddrs(i) + bytesInLine * c.numCoresForInputChannel(i)) {
             assert((curAddr - c.inputChannelStartAddrs(i)) % bytesInLine == 0)
-            val inputCore = (curAddr - c.inputChannelStartAddrs(i)) / bytesInLine
+            inputCore = (curAddr - c.inputChannelStartAddrs(i)) / bytesInLine
             val absoluteInputCore = inputCore + c.inputChannelBounds(i)
             assert(perCoreInputCounters(i)(inputCore) == 0)
             val (outputChannel, outputCore) = getOutputLocForInputLoc(i, inputCore)
@@ -119,7 +120,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             assert(offset % bytesInLine == 0)
             val lineInChannel = offset / bytesInLine
             assert(lineInChannel < inputLinesCum(i)(c.numCoresForInputChannel(i)))
-            var inputCore = 0
+            inputCore = 0
             while (lineInChannel >= inputLinesCum(i)(inputCore)) {
               inputCore += 1
             }
@@ -133,7 +134,8 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             perCoreInputCounters(i)(inputCore) += 1
             inputs(absoluteInputCore)._2(inputElement)
           }
-        println("pushed valid input block to channel: " + i + ", element: " + pushedBlock.toString(16))
+        println("pushed valid input block to channel: " + i + ", core: " + inputCore + ", element: "
+          + pushedBlock.toString(16))
       }
     }
     for (i <- 0 until c.numOutputChannels) {
@@ -184,7 +186,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
           } else {
             (BigInt(1) << c.bramLineSize) - 1
           }
-        println("read valid output element from channel: " + i + ", element: " +
+        println("read valid output element from channel: " + i + ", core: " + outputCore + ", element: " +
           (outputLine & mask).toString(16))
         if (outputElement == 0) {
           assert(outputLine.toInt == outputs(absoluteOutputCore)._1)

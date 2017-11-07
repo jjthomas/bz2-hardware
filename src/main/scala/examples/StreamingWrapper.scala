@@ -22,7 +22,6 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     val outputBits = Output(UInt(util.log2Ceil(bramLineSize + 1).W))
     // hold continuously starting at some point (at least one cycle) after flush of final output
     val outputFinished = Output(Bool())
-    val outputMemFlushed = Input(Bool())
   })
   assert(wordBits <= bramWidth)
   assert(bramWidth % wordBits == 0)
@@ -115,19 +114,19 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   when (outputReadingStartedPrev && !outputReadingStarted) {
     outputReadingStarted := true.B
   }
-  when (io.outputMemBlockReady && outputReadingStarted && outputReadAddr =/= (bramNumAddrs - 1).U) {
+  when (io.outputMemBlockReady && outputReadingStarted && !(outputReadAddr === (bramNumAddrs - 1).U)) {
     outputReadAddr := outputReadAddr + 1.U
     when (outputReadAddr === 0.U) {
       outputBits := 0.U // allow new output bits to be written into the output BRAM right away
     }
   }
-  io.inputMemConsumed := inputBitsRemaining === 0.U && !io.inputFinished
+  io.inputMemConsumed := inputBitsRemaining === 0.U
   io.outputMemBlockValid := outputReadingStarted
   io.outputMemBlock := outputBram.io.b_dout
   io.outputBits := outputBits
   io.outputFinished := inner.io.outputFinished && outputBits === 0.U && outputReadAddr === 0.U // last term needed
   // so that this signal is only asserted after outputMemFlushed signaled for last block
-  when (io.outputMemFlushed) {
+  when (outputReadingStarted && outputReadAddr === (bramNumAddrs - 1).U) {
     outputReadingStartedPrev := false.B
     outputReadingStarted := false.B
     outputReadAddr := 0.U
@@ -148,7 +147,6 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
   val outputMemBlock = Output(UInt(bramWidth.W))
   val outputMemIdx = Output(UInt(bramAddrBits.W))
   val outputMemBlockValid = Output(Bool())
-  val outputMemBlockReady = Input(Bool())
   val outputFinished = Output(Bool())
 
   override def cloneType(): this.type = new StreamingCoreIO(bramWidth, bramNumAddrs).asInstanceOf[this.type]
@@ -169,7 +167,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   val coreInputFinished = RegInit(false.B)
   val outputBits = RegInit(0.asUInt(32.W))
   val outputBlockCounter = RegInit(0.asUInt(bramAddrBits.W))
-  val outputLengthCommitted = RegInit(false.B)
+  val outputLengthSent = RegInit(false.B)
   val inputMemAddr = RegInit(metadataPtr.asUInt(32.W))
   val outputMemAddr = Reg(UInt(32.W))
   val outputLenAddr = Reg(UInt(32.W))
@@ -266,19 +264,20 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   }
   io.outputMemAddr := Mux(core.io.outputFinished, outputLenAddr, outputMemAddr)
   io.outputMemAddrValid := !outputAddressAccepted && (core.io.outputMemBlockValid ||
-    (core.io.outputFinished && !outputLengthCommitted))
+    (core.io.outputFinished && !outputLengthSent))
   when (io.outputMemAddrValid && io.outputMemAddrReady) {
     outputAddressAccepted := true.B
     when (!core.io.outputFinished) {
       outputBits := outputBits + core.io.outputBits
+      outputMemAddr := outputMemAddr + bytesInLine.U
+    } .otherwise {
+      outputLengthSent := true.B
     }
   }
   core.io.outputMemBlockReady := outputAddressAccepted
   when (outputAddressAcceptedNext) {
     when (outputBlockCounter === (bramNumAddrs - 1).U) {
-      when (io.outputMemBlockReady) {
-        outputBlockCounter := 0.U
-      }
+      outputBlockCounter := 0.U
     } .otherwise {
       outputBlockCounter := outputBlockCounter + 1.U
     }
@@ -291,22 +290,15 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
     }
   }
   outputBitsBlock := tmp
-  io.outputMemBlock := Mux(core.io.outputFinished, outputBitsBlock, core.io.outputMemBlock)
+  io.outputMemBlock := Mux(outputLengthSent, outputBitsBlock, core.io.outputMemBlock)
   io.outputMemIdx := outputBlockCounter
 
   io.outputMemBlockValid := outputAddressAcceptedNext
-  core.io.outputMemFlushed := outputAddressAcceptedNext && io.outputMemBlockReady
-  when (outputAddressAcceptedNext && io.outputMemBlockReady) {
+  when (outputAddressAcceptedNext && outputBlockCounter === (bramNumAddrs - 1).U) {
     outputAddressAccepted := false.B
     outputAddressAcceptedNext := false.B
-    // TODO make sure outputFinished can't be set until a cycle after outputMemFlushed is asserted
-    when (core.io.outputFinished) {
-      outputLengthCommitted := true.B
-    } .otherwise {
-      outputMemAddr := outputMemAddr + bytesInLine.U
-    }
   }
-  io.outputFinished := outputLengthCommitted
+  io.outputFinished := outputLengthSent && !outputAddressAccepted
 }
 
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
@@ -485,7 +477,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
             val curOutputMemBlockValid = Reg(Bool())
             val curOutputMemBlock = Reg(UInt(bramWidth.W))
             val curOutputMemIdx = Reg(UInt(bramAddrBits.W))
-            val curOutputFinished = Reg(Bool())
+            val curOutputFinished = RegInit(false.B)
             if (curTreeLevel(i) == null) {
               curOutputMemAddr := curTreeLevel(i + 1)(j)._1
               curOutputMemAddrValid := curTreeLevel(i + 1)(j)._2
@@ -511,8 +503,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
                 curTreeLevel(i + 1)(j)._4, curTreeLevel(i)(j)._4)
               curOutputMemIdx := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._5, curTreeLevel(i)(j)._5)
-              curOutputFinished := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
-                curTreeLevel(i + 1)(j)._6, curTreeLevel(i)(j)._6)
+              curOutputFinished := curTreeLevel(i + 1)(j)._6 && curTreeLevel(i)(j)._6
             }
             newTreeLevel(i / 2)(j) = (curOutputMemAddr, curOutputMemAddrValid, curOutputMemBlockValid,
               curOutputMemBlock, curOutputMemIdx, curOutputFinished)
@@ -600,7 +591,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         groupCounterInputBlock := groupCounterInputBlock + 1.U
       }
     }
-    // TODO do we need inputMemBlockReady signal from core?
     io.inputMemBlockReadys(i) :=
       treeCycleCounterInput === inputTreeLevel.U && selInputMemAddrValid(i)(groupCounterInputBlock) && !blocksComplete
     for (j <- inputChannelBounds(i) / inputGroupSize until inputChannelBounds(i + 1) / inputGroupSize) {
@@ -624,12 +614,17 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
   }
 
+  val outputChannelsComplete = new Array[Bool](numOutputChannels)
   for (i <- 0 until numOutputChannels) {
     val treeCycleCounterOutput = RegInit(0.asUInt(util.log2Ceil(outputTreeLevel + 1).W))
     when (treeCycleCounterOutput =/= outputTreeLevel.U) {
       treeCycleCounterOutput := treeCycleCounterOutput + 1.U
     }
+    // need the following two fields because, unlike in the input case, address may not have been emitted to
+    // the shell even when the block is fully written to the internal buffer, so we need to save the address information
+    // here
     val outputMemAddrValid = RegInit(VecInit((0 until outputGroupSize).map(_ => false.B)))
+    outputChannelsComplete(i) = outputMemAddrValid.asUInt === 0.U
     val outputMemAddr = Reg(Vec(outputGroupSize, UInt(32.W)))
     val outputBuffer = Reg(Vec(outputGroupSize, Vec(bramNumAddrs, UInt(bramWidth.W))))
     val outputBufferValid = RegInit(VecInit((0 until outputGroupSize).map(_ => false.B)))
@@ -669,9 +664,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     io.outputMemBlocks(i) := selectedOutputBlock
     io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutputBlock)
     io.outputMemBlockLasts(i) := nativeLineCounter === (bramNumNativeLines - 1).U
-    when ((treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutputAddr)) ||
-      (io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
-      (zerothCoreDelay && !outputMemAddrValid(groupCounterOutputAddr))) {
+    when ((io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
+          (zerothCoreDelay && !outputMemAddrValid(groupCounterOutputAddr))) {
       when (groupCounterOutputAddr === (outputGroupSize - 1).U) {
         addrsComplete := true.B
       } .otherwise {
@@ -681,10 +675,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)) {
       nativeLineCounter := Mux(nativeLineCounter === (bramNumNativeLines - 1).U, 0.U, nativeLineCounter + 1.U)
     }
-    when ((treeCycleCounterOutput === outputTreeLevel.U && selOutputFinished(i)(groupCounterOutputBlock)) ||
-      (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U) ||
-      (!outputMemAddrValid(groupCounterOutputBlock) &&
-        (groupCounterOutputBlock < groupCounterOutputAddr || addrsComplete))) {
+    when ((io.outputMemBlockValids(i) && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
+      || (!outputMemAddrValid(groupCounterOutputBlock) &&
+          (groupCounterOutputBlock < groupCounterOutputAddr || addrsComplete))) {
       when (groupCounterOutputBlock === (outputGroupSize - 1).U) {
         curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) / outputGroupSize - 1).U,
           (outputChannelBounds(i) / outputGroupSize).U, curOutputCore(i) + 1.U)
@@ -706,9 +699,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         cores(k).outputMemAddrReady := Mux(curOutputCore(i) === j.U, treeCycleCounterOutput === outputTreeLevel.U
           && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize) &&
           (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
-        cores(k).outputMemBlockReady := Mux(curOutputCore(i) === j.U,
-          groupCounterOutputBlock === (k - j * outputGroupSize).U && (io.outputMemBlockValids(i)
-            && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U), false.B)
       }
     }
 
@@ -723,9 +713,14 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         p"${curOutputCore(i)##groupCounterOutputAddr}, channel $i\n")
     }
   }
-  var cumFinished = cores(0).outputFinished
-  for (i <- 1 until numCores) {
-    cumFinished = cumFinished && cores(i).outputFinished
+  var cumFinished = true.B
+  for (i <- 0 until numOutputChannels) {
+    for (j <- 0 until outputGroupSize) {
+      cumFinished = cumFinished && selOutputFinished(i)(j)
+    }
+  }
+  for (i <- 0 until numOutputChannels) {
+    cumFinished = cumFinished && outputChannelsComplete(i)
   }
   io.finished := cumFinished
 }
