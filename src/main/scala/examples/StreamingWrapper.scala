@@ -13,14 +13,11 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     val inputMemBlockValid = Input(Bool())
     val inputBits = Input(UInt(util.log2Ceil(bramLineSize + 1).W))
     val inputMemConsumed = Output(Bool())
-    // continuously asserted at least one cycle after inputMemConsumed emitted for final block
     val inputFinished = Input(Bool())
     val outputMemBlock = Output(UInt(bramWidth.W))
-    // must hold valid until we received flushed signal
     val outputMemBlockValid = Output(Bool())
     val outputMemBlockReady = Input(Bool())
     val outputBits = Output(UInt(util.log2Ceil(bramLineSize + 1).W))
-    // hold continuously starting at some point (at least one cycle) after flush of final output
     val outputFinished = Output(Bool())
   })
   assert(wordBits <= bramWidth)
@@ -31,7 +28,6 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
   val inputPieceBitsRemaining = RegInit(0.asUInt(util.log2Ceil(bramWidth + 1).W))
   val inputBitsRemaining = RegInit(0.asUInt(util.log2Ceil(bramLineSize + 1).W))
-  val inputBlockLoaded = RegInit(false.B)
   val outputMemBlock = Reg(Vec(bramWidth, Bool()))
   val outputBits = RegInit(0.asUInt(util.log2Ceil(bramLineSize + 1).W))
   val outputPieceBits = RegInit(0.asUInt(util.log2Ceil(bramWidth + 1).W))
@@ -47,23 +43,29 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   inputBram.io.a_addr := io.inputMemIdx
   inputBram.io.a_din := io.inputMemBlock
   when (io.inputMemBlockValid && io.inputMemIdx === 1.U) {
-    inputBlockLoaded := true.B
     inputBitsRemaining := io.inputBits
-  }
-  when (inputBlockLoaded && inputBitsRemaining === 0.U) {
-    inputBlockLoaded := false.B
   }
 
   inputBram.io.b_wr := false.B
-  inputBram.io.b_addr := inputReadAddr
-  when (inputBlockLoaded && inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) {
-    inputPieceBitsRemaining := Mux(inputBitsRemaining < bramWidth.U, inputBitsRemaining, bramWidth.U)
-    inputReadAddr := inputReadAddr + 1.U // wraps around on final piece
+  val inputReadAddrFinal = Wire(UInt(bramAddrBits.W))
+  inputBram.io.b_addr := inputReadAddrFinal
+  // inputPieceBitsRemaining === 0.U is true at the start and end of the reading of a block, here
+  // we ensure that we capture it only in the start case
+  when ((inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) ||
+        (inner.io.inputValid && inner.io.inputReady && ((inputPieceBitsRemaining - wordBits.U) === 0.U))) {
+    val newInputBitsRemaining = Mux(inputPieceBitsRemaining === 0.U, inputBitsRemaining,
+      inputBitsRemaining - wordBits.U)
+    inputPieceBitsRemaining := Mux(newInputBitsRemaining < bramWidth.U, newInputBitsRemaining, bramWidth.U)
+    inputBitsRemaining := newInputBitsRemaining
+    inputReadAddr := Mux(newInputBitsRemaining === 0.U, inputReadAddr, inputReadAddr + 1.U)
+    inputReadAddrFinal := inputReadAddr + 1.U
     for (i <- 0 until bramWidth) {
       inputMemBlock(i) := inputBram.io.b_dout(i)
     }
+  } .otherwise {
+    inputReadAddrFinal := inputReadAddr
   }
-  when (inner.io.inputValid && inner.io.inputReady) {
+  when (inner.io.inputValid && inner.io.inputReady && !((inputPieceBitsRemaining - wordBits.U) === 0.U)) {
     inputPieceBitsRemaining := inputPieceBitsRemaining - wordBits.U
     inputBitsRemaining := inputBitsRemaining - wordBits.U
     for (i <- 0 until (bramWidth - wordBits)) {
@@ -538,6 +540,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (treeCycleCounterInput === inputTreeLevel.U && !zerothCoreDelay) {
       zerothCoreDelay := true.B
     }
+    /*
+    printf(p"curInputBlockCore: ${curInputBlockCore(0)}\n")
+    printf(p"treeCycleCounterInput: ${treeCycleCounterInput === inputTreeLevel.U}\n")
+    printf(p"selInputMemAddrValid: ${selInputMemAddrValid(i).asUInt}\n")
+    */
     io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
     io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeLevel.U &&
       selInputMemAddrValid(i)(groupCounterInputAddr) && !addrsComplete
@@ -581,7 +588,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
     when ((io.inputMemBlockValids(i) && io.inputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
       || (!selInputMemAddrValid(i)(groupCounterInputBlock) &&
-          (groupCounterInputBlock < groupCounterInputAddr || addrsComplete))) {
+          (groupCounterInputBlock < groupCounterInputAddr || (addrsComplete && !blocksComplete)))) {
       when (selInputMemAddrValid(i)(groupCounterInputBlock)) {
         inputBufferValid(groupCounterInputBlock) := true.B
       }
