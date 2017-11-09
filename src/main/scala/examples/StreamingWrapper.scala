@@ -342,7 +342,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val bramAddrsPerNativeLine = 512 / bramWidth
 
   val _cores = new Array[StreamingCore](numCores)
-  val curInputBlockCore = new Array[UInt](numInputChannels)
+  val curInputCore = new Array[UInt](numInputChannels)
   val curOutputCore = new Array[UInt](numOutputChannels)
 
   def numCoresForInputChannel(channel: Int): Int = {
@@ -379,7 +379,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val cores = VecInit(_cores.map(_.io))
 
   for (i <- 0 until numInputChannels) {
-    curInputBlockCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
+    curInputCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
       .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
   }
   for (i <- 0 until numOutputChannels) {
@@ -424,9 +424,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
               curInputMemAddr := curTreeLevel(i)(j)._1
               curInputMemAddrValid := curTreeLevel(i)(j)._2
             } else {
-              curInputMemAddr := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddr := Mux(curInputCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._1, curTreeLevel(i)(j)._1)
-              curInputMemAddrValid := Mux(curInputBlockCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddrValid := Mux(curInputCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._2, curTreeLevel(i)(j)._2)
             }
             newTreeLevel(i / 2)(j) = (curInputMemAddr, curInputMemAddrValid)
@@ -540,11 +540,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (treeCycleCounterInput === inputTreeLevel.U && !zerothCoreDelay) {
       zerothCoreDelay := true.B
     }
-    /*
-    printf(p"curInputBlockCore: ${curInputBlockCore(0)}\n")
-    printf(p"treeCycleCounterInput: ${treeCycleCounterInput === inputTreeLevel.U}\n")
-    printf(p"selInputMemAddrValid: ${selInputMemAddrValid(i).asUInt}\n")
-    */
     io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
     io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeLevel.U &&
       selInputMemAddrValid(i)(groupCounterInputAddr) && !addrsComplete
@@ -577,8 +572,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
     }
     when (blocksComplete && inputBufferValid.asUInt === 0.U) {
-      curInputBlockCore(i) := Mux(curInputBlockCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-        (inputChannelBounds(i) / inputGroupSize).U, curInputBlockCore(i) + 1.U)
+      curInputCore(i) := Mux(curInputCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
+        (inputChannelBounds(i) / inputGroupSize).U, curInputCore(i) + 1.U)
       treeCycleCounterInput := 0.U
       groupCounterInputBlock := 0.U
       groupCounterInputAddr := 0.U
@@ -604,7 +599,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       for (k <- j * inputGroupSize until (j + 1) * inputGroupSize) {
         cores(k).inputMemBlock := inputBuffer(k - j * inputGroupSize)(inputBufferIdx(k - j * inputGroupSize))
         cores(k).inputMemIdx := inputBufferIdx(k - j * inputGroupSize)
-        cores(k).inputMemBlockValid := Mux(curInputBlockCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
+        cores(k).inputMemBlockValid := Mux(curInputCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
           false.B)
       }
     }
@@ -612,12 +607,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
       // TODO this concat might not work, see above
       printf(p"inputBuffer: 0x${Hexadecimal(io.inputMemBlocks(i))} for core " +
-        p"${curInputBlockCore(i)##groupCounterInputBlock}, channel $i\n")
+        p"${curInputCore(i)##groupCounterInputBlock}, channel $i\n")
     }
     when (io.inputMemAddrReadys(i) && io.inputMemAddrValids(i)) {
       // TODO this concat might not work, see above
       printf(p"input address: 0x${Hexadecimal(io.inputMemAddrs(i))} accepted for core " +
-        p"${curInputBlockCore(i)##groupCounterInputAddr}, channel $i\n")
+        p"${curInputCore(i)##groupCounterInputAddr}, channel $i\n")
     }
   }
 
