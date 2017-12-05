@@ -15,7 +15,7 @@ class StreamWhenContext(cond: StreamBool, prevCond: StreamBool, block: => Unit) 
     new StreamWhenContext(prevCond, null, block)
   }
 
-  Builder.startContext(this)
+  Builder.curBuilder.startContext(this)
   block
-  Builder.endContext()
+  Builder.curBuilder.endContext()
 }
