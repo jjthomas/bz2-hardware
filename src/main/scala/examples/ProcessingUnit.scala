@@ -2,6 +2,7 @@ package examples
 
 import chisel3._
 import chisel3.core.Bundle
+import language.Builder
 
 class ProcessingUnitIO(wordSize: Int) extends Bundle {
   val inputWord = Input(UInt(wordSize.W))
@@ -17,4 +18,5 @@ class ProcessingUnitIO(wordSize: Int) extends Bundle {
 }
 abstract class ProcessingUnit(wordSize: Int) extends Module {
   val io = IO(new ProcessingUnitIO(wordSize))
+  Builder.nextBuilder(wordSize, wordSize, io)
 }

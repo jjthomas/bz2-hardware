@@ -1,8 +1,8 @@
 package examples
 
+import language.{Builder, StreamInput, Emit}
+
 class PassThrough(wordSize: Int, coreId: Int) extends ProcessingUnit(wordSize) {
-  io.outputWord := io.inputWord
-  io.outputValid := io.inputValid
-  io.outputFinished := io.inputFinished
-  io.inputReady := io.outputReady
+  Emit(0, StreamInput(0))
+  Builder.curBuilder.compile()
 }

@@ -76,7 +76,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
 
   def readDepth(b: StreamBits): Int = {
     val thisReads = b match {
-      case BRAMSelect => 1
+      case BRAMSelect(_, _) => 1
       case _ => 0
     }
     thisReads + b.productIterator.map {
@@ -88,9 +88,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
   def addRAMReads(cond: StreamBool, b: StreamBits, reads: Array[ArrayBuffer[(StreamBool, StreamBits)]]): Unit = {
     b match {
       case s: BRAMSelect => reads(s.arg.stateId).append((cond, s.idx))
+      case _ =>
     }
     b.productIterator.foreach {
       case s: StreamBits => addRAMReads(cond, s, reads)
+      case _ =>
     }
   }
 
@@ -103,6 +105,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case s: BitSelect => genBits(s.arg)(s.upper, s.lower)
       case r: StreamReg => chiselRegs(r.stateId)
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
+      case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
   }
 
@@ -117,6 +120,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case l: LessThanEqual => genBits(l.first) <= genBits(l.second)
       case g: GreaterThan => genBits(g.first) > genBits(g.second)
       case g: GreaterThanEqual => genBits(g.first) >= genBits(g.second)
+      case _ => throw new StreamException("unexpected type in genBool: " + b.getClass.toString)
     }
   }
 
@@ -138,10 +142,10 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       bramWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
     }
     val pipeDepth = Array(
-      assignments.map { case (_, a) => readDepth(a.rhs) }.max,
-      emits.map { case (_, e) => readDepth(e.data) }.max,
-      conds.map { case (_, c) => readDepth(c)}.max,
-      1
+      (assignments.map { case (_, a) => readDepth(a.rhs) } ++ Array(0)).max,
+      (emits.map { case (_, e) => readDepth(e.data) } ++ Array(0)).max,
+      (conds.map { case (_, c) => readDepth(c)} ++ Array(0)).max,
+      1 // TODO reg-only design runs at 2 cycles per input currently
     ).max
     val pipe = RegInit(VecInit((0 until pipeDepth).map(_ => false.B)))
     when (!io.outputValid || io.outputReady) {
@@ -169,6 +173,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       addRAMReads(cond, a.rhs, bramReads)
       a.lhs match {
         case b: BRAMSelect => addRAMReads(cond, b.idx, bramReads)
+        case _ =>
       }
     }
     for ((cond, e) <- emits) {
@@ -192,6 +197,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     for ((cond, a) <- assignments) {
       a.lhs match {
         case b: BRAMSelect => bramWrites(b.arg.stateId).append((cond, b.idx, a.rhs))
+        case _ =>
       }
     }
     for ((cb, writes) <- chiselBrams.zip(bramWrites)) {
@@ -216,6 +222,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     for ((cond, a) <- assignments) {
       a.lhs match {
         case r: StreamReg => regWrites(r.stateId).append((cond, a.rhs))
+        case _ =>
       }
     }
     for ((cr, writes) <- chiselRegs.zip(regWrites)) {
