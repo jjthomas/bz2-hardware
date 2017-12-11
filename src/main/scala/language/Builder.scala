@@ -152,9 +152,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       for (i <- 1 until pipeDepth) {
         pipe(i) := pipe(i - 1)
       }
-      pipe(0) := io.inputValid && io.inputReady
+      pipe(0) := io.inputValid && pipe.asUInt === 0.U
     }
-    io.inputReady := pipe.asUInt === 0.U
+    io.inputReady := pipe(pipeDepth - 1) && (!io.outputValid || io.outputReady)
     io.outputFinished := io.inputFinished && pipe.asUInt === 0.U
 
     // emits
