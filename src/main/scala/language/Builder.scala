@@ -154,8 +154,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       for (i <- 1 until pipeDepth) {
         pipe(i) := pipe(i - 1)
       }
+      // pipeline should be cleared and previous input acknowledged before accepting next one
       pipe(0) := io.inputValid && pipe.asUInt === 0.U
     }
+    // Signalling ready for the input that was just processed (this ensures that we
+    // don't have to save the input token in a register if we have a multi-cycle pipeline).
+    // Only works if we can have only one token in the pipeline at a time.
     io.inputReady := pipe(pipeDepth - 1) && (!io.outputValid || io.outputReady)
     io.outputFinished := io.inputFinished && pipe.asUInt === 0.U
 
