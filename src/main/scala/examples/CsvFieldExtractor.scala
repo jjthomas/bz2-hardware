@@ -1,56 +1,33 @@
 package examples
 
-import chisel3._
+import chisel3.util
+import language._
 
 class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends ProcessingUnit(8) {
-  // state
-  val curField = RegInit(0.asUInt(util.log2Ceil(numFields).W))
-  val inQuote = RegInit(false.B)
-  val lastChar = RegInit(' '.toInt.asUInt(8.W))
+  val curField = StreamReg(util.log2Ceil(numFields), 0)
+  val inQuote = StreamReg(1, false)
+  val lastChar = StreamReg(8, ' '.toInt)
 
-  // new states
-  val inQuoteNext = Wire(Bool())
-  when (io.inputWord === '"'.toInt.U) {
-    when (!inQuote) {
-      inQuoteNext := true.B
+  swhen (StreamInput(0) === '"'.toInt.L) {
+    swhen (!inQuote.B) {
+      inQuote := true.L
     } .otherwise {
-      inQuoteNext := lastChar === '\\'.toInt.U
+      inQuote := lastChar === '\\'.toInt.L
     }
-  } .otherwise {
-    inQuoteNext := inQuote
   }
-
-  val curFieldNext = Wire(UInt(util.log2Ceil(numFields).W))
-  when (io.inputWord === ','.toInt.U) {
-    when (!inQuote) {
-      curFieldNext := curField + 1.U
-    } .otherwise {
-      curFieldNext := curField
+  swhen (StreamInput(0) === ','.toInt.L) {
+    swhen (!inQuote.B) {
+      curField := curField + 1.L
     }
-  } .elsewhen (io.inputWord === '\n'.toInt.U) {
-    when (!inQuote) {
-      curFieldNext := 0.U
-    } .otherwise {
-      curFieldNext := curField
+  } .elsewhen (StreamInput(0) === '\n'.toInt.L) {
+    swhen (!inQuote.B) {
+      curField := 0.L
     }
-  } .otherwise {
-    curFieldNext := curField
   }
+  lastChar := StreamInput(0)
 
-  val lastCharNext = Wire(UInt(8.W))
-  lastCharNext := io.inputWord
-
-  // output
-  io.outputWord := io.inputWord
-  io.outputValid := io.inputValid && curField === targetField.U && curFieldNext === targetField.U
-  // (standard outputs for processing units that can only produce valid output on a cycle where input is valid)
-  io.outputFinished := io.inputFinished
-  io.inputReady := io.outputReady
-
-  // commit new states
-  when (io.inputValid) {
-    inQuote := inQuoteNext
-    curField := curFieldNext
-    lastChar := lastCharNext
+  swhen (curField === targetField.L && !(StreamInput(0) === ','.toInt.L && !inQuote.B)) {
+    Emit(0, StreamInput(0))
   }
+  Builder.curBuilder.compile()
 }

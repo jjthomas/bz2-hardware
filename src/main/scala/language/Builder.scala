@@ -56,7 +56,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
 
   def getContextCondition(): StreamBool = {
     if (context.isEmpty) {
-      StreamTrue
+      true.L.B
     } else {
       var cond = context(0).cond
       for (i <- 1 until context.length) {
@@ -101,21 +101,23 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case l: Literal => l.l.U
       case a: Add => genBits(a.first) + genBits(a.second)
       case s: Subtract => genBits(s.first) - genBits(s.second)
+      case c: Concat => genBits(c.first)##genBits(c.second)
       case i: StreamInput => io.inputWord
       case s: BitSelect => genBits(s.arg)(s.upper, s.lower)
       case r: StreamReg => chiselRegs(r.stateId)
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
+      case b: StreamBool => genBool(b) // treat the bool as regular bits
       case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
   }
 
   def genBool(b: StreamBool): Bool = {
     b match {
-      case StreamTrue => true.B
-      case StreamFalse => false.B
       case n: Negate => !genBool(n.arg)
       case a: And => genBool(a.arg1) && genBool(a.arg2)
       case o: Or => genBool(o.arg1) || genBool(o.arg2)
+      case c: BoolCast => genBits(c.arg).toBool()
+      case e: Equal => genBits(e.first) === genBits(e.second)
       case l: LessThan => genBits(l.first) < genBits(l.second)
       case l: LessThanEqual => genBits(l.first) <= genBits(l.second)
       case g: GreaterThan => genBits(g.first) > genBits(g.second)
@@ -173,6 +175,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       addRAMReads(cond, a.rhs, bramReads)
       a.lhs match {
         case b: BRAMSelect => addRAMReads(cond, b.idx, bramReads)
+        case v: VectorSelect => addRAMReads(cond, v.idx, bramReads)
         case _ =>
       }
     }
