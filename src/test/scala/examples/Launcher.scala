@@ -186,11 +186,12 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array(Util.charsToBits("1111,21112".toCharArray, 512),
+            val inputs = Array(Util.charsToBits("1111\"2,2\",21112\n1,2".toCharArray, 512),
               Util.charsToBits("1,21112".toCharArray, 512), Util.charsToBits("111,21112".toCharArray, 512),
               Util.charsToBits("11,21112".toCharArray, 512))
-            val outputs = Array(Util.charsToBits("1111".toCharArray, 512), Util.charsToBits("1".toCharArray, 512),
-              Util.charsToBits("111".toCharArray, 512), Util.charsToBits("11".toCharArray, 512))
+            val outputs = Array(Util.charsToBits("1111\"2,2\",1,".toCharArray, 512),
+              Util.charsToBits("1,".toCharArray, 512), Util.charsToBits("111,".toCharArray, 512),
+              Util.charsToBits("11,".toCharArray, 512))
             new StreamingWrapperTests(c, inputs, outputs)
           }
         }

@@ -26,8 +26,12 @@ class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends P
   }
   lastChar := StreamInput(0)
 
-  swhen (curField === targetField.L && !(StreamInput(0) === ','.toInt.L && !inQuote.B)) {
-    Emit(0, StreamInput(0))
+  swhen (curField === targetField.L) {
+    swhen (StreamInput(0) === ','.toInt.L && !inQuote.B) {
+      Emit(0, ','.toInt.L)
+    } .otherwise {
+      Emit(0, StreamInput(0))
+    }
   }
   Builder.curBuilder.compile()
 }

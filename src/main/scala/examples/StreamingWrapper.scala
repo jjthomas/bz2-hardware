@@ -528,6 +528,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (!(treeCycleCounterInput === inputTreeLevel.U)) {
       treeCycleCounterInput := treeCycleCounterInput + 1.U
     }
+    // required because valid may go from false to true during the processing of a group, and we
+    // want to use only the valid value we originally saw when consuming the group's addresses
     val inputMemAddrValid = RegInit(VecInit((0 until inputGroupSize).map(_ => false.B)))
     val inputBuffer = Reg(Vec(inputGroupSize, Vec(bramNumAddrs, UInt(bramWidth.W))))
     val inputBufferIdx = RegInit(VecInit((0 until inputGroupSize).map(_ => 0.asUInt(bramAddrBits.W))))
