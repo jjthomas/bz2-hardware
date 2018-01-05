@@ -150,13 +150,26 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
     val vectorRegWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](vectorRegs.length) // cond,
     // addr, data
-    for ((r, i) <- vectorRegs.zipWithIndex) {
+    for (i <- 0 until vectorRegWrites.length) {
+      vectorRegWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
+    }
+    for ((cond, a) <- assignments) {
+      a.lhs match {
+        case v: VectorRegSelect => vectorRegWrites(v.arg.stateId).append((cond, v.idx, a.rhs))
+        case _ =>
+      }
+    }
+    for ((r, writes) <- vectorRegs.zip(vectorRegWrites)) {
       if (r.init != null) {
-        chiselVectorRegs.append(RegInit(VecInit(r.init.map(b => b.asUInt(r.width.W)))))
+        val initUInts = r.init.map(b => b.asUInt(r.width.W))
+        if (writes.length == 0) {
+          chiselVectorRegs.append(VecInit(initUInts))
+        } else {
+          chiselVectorRegs.append(RegInit(VecInit(initUInts)))
+        }
       } else {
         chiselVectorRegs.append(Reg(Vec(r.numEls, UInt(r.width.W))))
       }
-      vectorRegWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
     }
     val bramReads = new Array[ArrayBuffer[(StreamBool, StreamBits)]](brams.length) // cond, addr
     val bramWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](brams.length) // cond, addr, data
@@ -264,12 +277,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
 
     // vector register writes
-    for ((cond, a) <- assignments) {
-      a.lhs match {
-        case v: VectorRegSelect => vectorRegWrites(v.arg.stateId).append((cond, v.idx, a.rhs))
-        case _ =>
-      }
-    }
     for ((cv, writes) <- chiselVectorRegs.zip(vectorRegWrites)) {
       if (writes.length > 0) { // don't write anything if no user-defined writes so that ROM will be synthesized
         var idx = genBits(writes(0)._2)
