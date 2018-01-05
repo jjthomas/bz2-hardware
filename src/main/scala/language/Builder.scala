@@ -19,13 +19,19 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
   require(inputWidth == outputWidth, "circuit inputWidth must equal outputWidth for now")
   val context = new ArrayBuffer[StreamWhenContext]
 
+  // semantics for reg is single write per input token, arbitrary number of reads
   val regs = new ArrayBuffer[StreamReg]
+  // semantics for vector reg is single write per input token (single address), arbitrary number of reads from any
+  // addresses
+  val vectorRegs = new ArrayBuffer[StreamVectorReg]
+  // semantics for BRAM is single read, single write per input token
   val brams = new ArrayBuffer[StreamBRAM]
   val assignments = new ArrayBuffer[(StreamBool, Assign)]
   val emits = new ArrayBuffer[(StreamBool, Emit)]
   val conds = new ArrayBuffer[(StreamBool, StreamBool)]
 
   val chiselRegs = new ArrayBuffer[UInt]
+  val chiselVectorRegs = new ArrayBuffer[Vec[UInt]]
   val chiselBrams = new ArrayBuffer[DualPortBRAM]
 
   def startContext(c: StreamWhenContext): Unit = {
@@ -50,7 +56,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         brams.append(b)
         brams.length - 1
       }
-      case _ => throw new StreamException("registers and BRAMs are the only supported assignables for now")
+      case v: StreamVectorReg => {
+        vectorRegs.append(v)
+        vectorRegs.length - 1
+      }
+      case _ => throw new StreamException("registers, vector registers, and BRAMs are the only supported " +
+        "assignables for now")
     }
   }
 
@@ -106,6 +117,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case s: BitSelect => genBits(s.arg)(s.upper, s.lower)
       case r: StreamReg => chiselRegs(r.stateId)
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
+      case v: VectorRegSelect => chiselVectorRegs(v.arg.stateId)(genBits(v.idx))
       case b: StreamBool => genBool(b) // treat the bool as regular bits
       case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
@@ -135,6 +147,16 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         chiselRegs.append(Reg(UInt(r.width.W)))
       }
       regWrites(i) = new ArrayBuffer[(StreamBool, StreamBits)]
+    }
+    val vectorRegWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](vectorRegs.length) // cond,
+    // addr, data
+    for ((r, i) <- vectorRegs.zipWithIndex) {
+      if (r.init != null) {
+        chiselVectorRegs.append(RegInit(VecInit(r.init.map(b => b.asUInt(r.width.W)))))
+      } else {
+        chiselVectorRegs.append(Reg(Vec(r.numEls, UInt(r.width.W))))
+      }
+      vectorRegWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
     }
     val bramReads = new Array[ArrayBuffer[(StreamBool, StreamBits)]](brams.length) // cond, addr
     val bramWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](brams.length) // cond, addr, data
@@ -179,7 +201,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       addRAMReads(cond, a.rhs, bramReads)
       a.lhs match {
         case b: BRAMSelect => addRAMReads(cond, b.idx, bramReads)
-        case v: VectorSelect => addRAMReads(cond, v.idx, bramReads)
+        case v: VectorRegSelect => addRAMReads(cond, v.idx, bramReads)
+        case v: VectorWireSelect => addRAMReads(cond, v.idx, bramReads)
         case _ =>
       }
     }
@@ -238,6 +261,27 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         data = Mux(genBool(cond), genBits(d), data)
       }
       cr := Mux(pipe(pipeDepth - 1) && (!io.outputValid || io.outputReady), data, cr)
+    }
+
+    // vector register writes
+    for ((cond, a) <- assignments) {
+      a.lhs match {
+        case v: VectorRegSelect => vectorRegWrites(v.arg.stateId).append((cond, v.idx, a.rhs))
+        case _ =>
+      }
+    }
+    for ((cv, writes) <- chiselVectorRegs.zip(vectorRegWrites)) {
+      if (writes.length > 0) { // don't write anything if no user-defined writes so that ROM will be synthesized
+        var idx = genBits(writes(0)._2)
+        for ((cond, i, _) <- writes.drop(1)) {
+          idx = Mux(genBool(cond), genBits(i), idx)
+        }
+        var data = cv(idx)
+        for ((cond, _, d) <- writes) {
+          data = Mux(genBool(cond), genBits(d), data)
+        }
+        cv(idx) := Mux(pipe(pipeDepth - 1) && (!io.outputValid || io.outputReady), data, cv(idx))
+      }
     }
   }
 

@@ -65,10 +65,18 @@ case class StreamBRAM(width: Int, numEls: Int) {
 
 case class BRAMSelect(arg: StreamBRAM, idx: StreamBits) extends AssignableStreamData(arg.width)
 
-case class StreamVector(el: AssignableStreamData, numEls: Int) {
+case class StreamVectorReg(width: Int, numEls: Int, init: Seq[BigInt]) {
+  require(init == null || init.size == numEls, "init must be null or have size equal to numEls")
   val stateId = Builder.curBuilder.registerAssignable(this)
 
-  def apply(idx: StreamBits) = VectorSelect(this, idx)
+  def apply(idx: StreamBits) = VectorRegSelect(this, idx)
 }
 
-case class VectorSelect(arg: StreamVector, idx: StreamBits) extends AssignableStreamData(arg.el.getWidth)
+case class StreamVectorWire(width: Int, numEls: Int) {
+  val stateId = Builder.curBuilder.registerAssignable(this)
+
+  def apply(idx: StreamBits) = VectorWireSelect(this, idx)
+}
+
+case class VectorRegSelect(arg: StreamVectorReg, idx: StreamBits) extends AssignableStreamData(arg.width)
+case class VectorWireSelect(arg: StreamVectorWire, idx: StreamBits) extends AssignableStreamData(arg.width)
