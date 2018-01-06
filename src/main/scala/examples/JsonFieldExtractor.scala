@@ -1,11 +1,13 @@
 package examples
 
+import chisel3.util
 import scala.collection.mutable.ArrayBuffer
 
-class JsonFieldExtractor(fields: Array[Array[String]], coreId: Int) extends ProcessingUnit(8) {
+class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId: Int) extends ProcessingUnit(8) {
   val fieldsQuoted = fields.map(f => f.map(id => "\"" + id + "\""))
 
   // char, is next branch sequential, next branch, idx for next branch
+  // TODO "idx for next branch" can be eliminated because it is always 0 or -1
   val sequentialBranches = new ArrayBuffer[ArrayBuffer[(Char, Boolean, Int, Int)]]
   val splitBranches = new ArrayBuffer[ArrayBuffer[(Char, Boolean, Int, Int)]]
   splitBranches.append(new ArrayBuffer[(Char, Boolean, Int, Int)])
@@ -78,4 +80,47 @@ class JsonFieldExtractor(fields: Array[Array[String]], coreId: Int) extends Proc
       }
     }
   }
+
+  var curStateId = 1 // space for the 0 init state
+  val sequentialStateIds = new Array[Int](sequentialBranches.length)
+  for ((branch, i) <- sequentialBranches.zipWithIndex) {
+    sequentialStateIds(i) = curStateId
+    curStateId += branch.length
+  }
+  val maxNeededState = curStateId + splitBranches.length // final state indicates a matched field
+  val stateBits = util.log2Ceil(maxNeededState)
+
+  val sequentialTransitions = new ArrayBuffer[BigInt]
+  val splitTransitions = (0 until splitBranches.length).map(_ => new ArrayBuffer[BigInt])
+  for ((branch, i) <- sequentialBranches.zipWithIndex) {
+    for (((c, isNextSeq, nextBranch, nextIdx), j) <- branch.zipWithIndex) {
+      var trans = BigInt(c.toInt) << stateBits
+      if (isNextSeq) {
+        if (j == branch.length - 1) {
+          trans |= maxNeededState // field complete
+        } else {
+          trans |= (sequentialStateIds(i) + j + 1) // must be the state ID after the current one
+        }
+      } else {
+        trans |= (curStateId + nextBranch) // state ID for the split branch
+      }
+      sequentialTransitions.append(trans)
+    }
+  }
+  for ((branch, i) <- splitBranches.zipWithIndex) {
+    for (((c, isNextSeq, nextBranch, nextIdx), j) <- branch.zipWithIndex) {
+      var trans = BigInt(c.toInt) << stateBits
+      if (isNextSeq) {
+        if (nextIdx == -1) {
+          trans |= maxNeededState // field complete
+        } else {
+          trans |= sequentialStateIds(nextBranch)
+        }
+      } else {
+        trans |= (curStateId + nextBranch) // state ID for the split branch
+      }
+      splitTransitions(i).append(trans)
+    }
+  }
+
 }
