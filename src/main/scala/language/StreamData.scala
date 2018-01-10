@@ -6,6 +6,7 @@ sealed abstract class StreamBits(width: Int) extends Product {
   def +(other: StreamBits) = Add(this, other)
   def -(other: StreamBits) = Subtract(this, other)
   def ===(other: StreamBits) = Equal(this, other)
+  def =/=(other: StreamBits) = NotEqual(this, other)
   def <(other: StreamBits) = LessThan(this, other)
   def >(other: StreamBits) = GreaterThan(this, other)
   def <=(other: StreamBits) = LessThanEqual(this, other)
@@ -19,6 +20,7 @@ case class Subtract(first: StreamBits, second: StreamBits) extends StreamBits(ma
 case class Concat(first: StreamBits, second: StreamBits) extends StreamBits(first.getWidth + second.getWidth)
 
 case class Equal(first: StreamBits, second: StreamBits) extends StreamBool
+case class NotEqual(first: StreamBits, second: StreamBits) extends StreamBool
 case class LessThan(first: StreamBits, second: StreamBits) extends StreamBool
 case class GreaterThan(first: StreamBits, second: StreamBits) extends StreamBool
 case class LessThanEqual(first: StreamBits, second: StreamBits) extends StreamBool

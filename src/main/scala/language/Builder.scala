@@ -130,6 +130,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case o: Or => genBool(o.arg1) || genBool(o.arg2)
       case c: BoolCast => genBits(c.arg).toBool()
       case e: Equal => genBits(e.first) === genBits(e.second)
+      case n: NotEqual => genBits(n.first) =/= genBits(n.second)
       case l: LessThan => genBits(l.first) < genBits(l.second)
       case l: LessThanEqual => genBits(l.first) <= genBits(l.second)
       case g: GreaterThan => genBits(g.first) > genBits(g.second)

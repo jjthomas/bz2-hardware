@@ -1,6 +1,7 @@
 package examples
 
 import chisel3.util
+import language._
 import scala.collection.mutable.HashMap
 import scala.collection.mutable.ArrayBuffer
 
@@ -44,13 +45,13 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
     }
   }
 
-  var curStateId = 1 // space for the 0 init state
+  var curStateId = 0
   val sequentialStateIds = new Array[Int](sequentialBranches.length)
   for ((branch, i) <- sequentialBranches.zipWithIndex) {
     sequentialStateIds(i) = curStateId
     curStateId += branch.length
   }
-  val stateBits = util.log2Ceil(curStateId)
+  val stateBits = util.log2Ceil(curStateId + 1) // need space for curStateId as well
 
   val sequentialTransitions = new ArrayBuffer[BigInt]
   for ((branch, i) <- sequentialBranches.zipWithIndex) {
@@ -79,4 +80,68 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
     }
   }
 
+  val numParseStates = 5 // expecting key (0), in key (1), expecting colon (2), expecting value (3), in value (4)
+  val inStringValue = StreamReg(1, false)
+  val lastChar = StreamReg(8, ' '.toInt)
+  val nestDepth = StreamReg(util.log2Ceil(maxNestDepth), 0)
+  val parseState = StreamReg(util.log2Ceil(numParseStates), 3)
+  val matchState = StreamReg(stateBits, 0)
+  val seqTransVec = StreamVectorReg(stateBits + 8, sequentialTransitions.length, sequentialTransitions)
+  val splitTransVecs = splitTransitions.map { case (stateId, trans) =>  (stateId,
+    StreamVectorReg(stateBits + 8, trans.length, trans)) }
+  val stateStack = (0 until maxNestDepth).map(i => StreamReg(stateBits, null))
+
+  def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
+
+  swhen (StreamInput(0) === '{'.toInt.L && parseState === 3.L) {
+    parseState := 0.L
+    // TODO switch the nestDepth and stack manipulations to state change from 3->4 and 4->0
+    nestDepth := nestDepth + 1.L
+    stateStack(0) := matchState
+    for (i <- 1 until stateStack.length) {
+      stateStack(i) := stateStack(i - 1)
+    }
+  }
+  swhen (StreamInput(0) === '}'.toInt.L && parseState === 0.L) {
+    parseState := 3.L
+    nestDepth := nestDepth - 1.L
+    matchState := stateStack(0)
+    for (i <- 0 until stateStack.length - 1) {
+      stateStack(i) := stateStack(i + 1)
+    }
+  }
+  val enteringKey = StreamInput(0) === '"'.toInt.L && parseState === 0.L
+  swhen (enteringKey) {
+    parseState := 1.L
+  }
+  swhen ((parseState === 1.L || enteringKey) && matchState =/= curStateId.L &&
+    (matchState =/= 0.L || nestDepth === 1.L)) { // only allow match to start at top level
+    val selectedSeqEl = seqTransVec(matchState)
+    swhen (StreamInput(0) === selectedSeqEl(stateBits + 7, stateBits)) {
+      matchState := selectedSeqEl(stateBits - 1, 0)
+    } .otherwise {
+      var noSplit: StreamBool = true.L.B
+      for ((stateId, vec) <- splitTransVecs) {
+        noSplit = noSplit && !(matchState === stateId.L)
+        swhen (matchState === stateId.L) {
+          var noMatch: StreamBool = true.L.B
+          for (i <- 0 until vec.numEls) {
+            val selectedSplitEl = vec(i.L)
+            noMatch = noMatch && !(StreamInput(0) === selectedSplitEl(stateBits + 7, stateBits))
+            swhen (StreamInput(0) === selectedSplitEl(stateBits + 7, stateBits)) {
+              matchState := selectedSplitEl(stateBits - 1, 0)
+            }
+          }
+          swhen (noMatch) {
+            matchState := 0.L
+          }
+        }
+      }
+      swhen (noSplit) {
+        matchState := 0.L
+      }
+    }
+  }
+
+  lastChar := StreamInput(0)
 }
