@@ -5,6 +5,7 @@ import language._
 import scala.collection.mutable.HashMap
 import scala.collection.mutable.ArrayBuffer
 
+// fields must be bottom-level (i.e. non-record types), and must all be present in every input record
 class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId: Int) extends ProcessingUnit(8) {
   val fieldsQuoted = fields.map(f => f.map(id => "\"" + id.replace("\"", "\\\"") + "\""))
 
@@ -80,7 +81,8 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
     }
   }
 
-  val numParseStates = 5 // expecting key (0), in key (1), expecting colon (2), expecting value (3), in value (4)
+  val numParseStates = 6 // expecting key (0), in key (1), expecting colon (2), expecting value (3), in value (4),
+  // expecting comma (5)
   val inStringValue = StreamReg(1, false)
   val lastChar = StreamReg(8, ' '.toInt)
   val nestDepth = StreamReg(util.log2Ceil(maxNestDepth), 0)
@@ -93,26 +95,68 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
 
   def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
 
-  swhen (StreamInput(0) === '{'.toInt.L && parseState === 3.L) {
-    parseState := 0.L
-    // TODO switch the nestDepth and stack manipulations to state change from 3->4 and 4->0
-    nestDepth := nestDepth + 1.L
-    stateStack(0) := matchState
-    for (i <- 1 until stateStack.length) {
-      stateStack(i) := stateStack(i - 1)
+  def popStateStack = {
+    swhen (matchState === curStateId.L) {
+      Emit(0, ','.toInt.L)
     }
-  }
-  swhen (StreamInput(0) === '}'.toInt.L && parseState === 0.L) {
-    parseState := 3.L
-    nestDepth := nestDepth - 1.L
     matchState := stateStack(0)
     for (i <- 0 until stateStack.length - 1) {
       stateStack(i) := stateStack(i + 1)
     }
   }
+
+  swhen (parseState === 3.L) {
+    swhen (StreamInput(0) === '{'.toInt.L) {
+      parseState := 0.L
+      nestDepth := nestDepth + 1.L
+    } .elsewhen (nestDepth =/= 0.L && !isWhitespace(StreamInput(0))) { // at nestDepth of 0 we only accept new records
+      Emit(0, StreamInput(0))
+      parseState := 4.L
+      inStringValue := StreamInput(0) === '"'.toInt.L
+    }
+  }
+  swhen (parseState === 4.L) {
+    swhen (inStringValue.B) {
+      swhen (StreamInput(0) === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
+        parseState := 5.L
+        popStateStack
+        inStringValue := false.L
+      } .otherwise {
+        Emit(0, StreamInput(0))
+      }
+    } .otherwise {
+      swhen (StreamInput(0) === ','.toInt.L) {
+        parseState := 0.L
+        popStateStack
+      } .elsewhen (isWhitespace(StreamInput(0))) {
+        parseState := 5.L
+        popStateStack
+      } .otherwise {
+        Emit(0, StreamInput(0))
+      }
+    }
+  }
+  swhen (StreamInput(0) === ','.toInt.L && parseState === 5.L) {
+    parseState := 0.L
+  }
+  swhen (StreamInput(0) === '}'.toInt.L &&
+    (parseState === 0.L || parseState === 5.L || (parseState === 4.L && !inStringValue.B))) {
+    swhen (nestDepth === 1.L) {
+      parseState := 3.L
+    } .otherwise {
+      parseState := 5.L
+      popStateStack
+    }
+    nestDepth := nestDepth - 1.L
+  }
+
   val enteringKey = StreamInput(0) === '"'.toInt.L && parseState === 0.L
   swhen (enteringKey) {
     parseState := 1.L
+    stateStack(0) := matchState
+    for (i <- 1 until stateStack.length) {
+      stateStack(i) := stateStack(i - 1)
+    }
   }
   swhen ((parseState === 1.L || enteringKey) && matchState =/= curStateId.L &&
     (matchState =/= 0.L || nestDepth === 1.L)) { // only allow match to start at top level
@@ -142,6 +186,11 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
       }
     }
   }
-
+  swhen (StreamInput(0) === '"'.toInt.L && parseState === 1.L) {
+    parseState := 2.L
+  }
+  swhen (StreamInput(0) === ':'.toInt.L && parseState === 2.L) {
+    parseState := 3.L
+  }
   lastChar := StreamInput(0)
 }
