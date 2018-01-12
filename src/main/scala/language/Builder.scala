@@ -293,4 +293,106 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
   }
 
+  def simulate(numInputBits: Int, inputBlockSize: Int, inputBits: Array[BigInt]): (Int, Int, Array[BigInt]) = {
+    assert(numInputBits % inputWidth == 0)
+    assert(inputBlockSize % inputWidth == 0)
+
+    var simRegsRead = new ArrayBuffer[BigInt]
+    var simVectorRegsRead = new ArrayBuffer[Array[BigInt]]
+    var simBramsRead = new ArrayBuffer[Array[BigInt]]
+    var simRegsWrite = new ArrayBuffer[BigInt]
+    var simVectorRegsWrite = new ArrayBuffer[Array[BigInt]]
+    var simBramsWrite = new ArrayBuffer[Array[BigInt]]
+
+    for (r <- regs) {
+      val nextEl = if (r.init != null) r.init else BigInt(0)
+      simRegsRead.append(nextEl)
+      simRegsWrite.append(nextEl)
+    }
+    for (v <- vectorRegs) {
+      val nextEl = if (v.init != null) v.init.toArray else (0 until v.numEls).map(_ => BigInt(0)).toArray
+      simVectorRegsRead.append(nextEl)
+      simVectorRegsWrite.append(nextEl)
+    }
+    for (b <- brams) {
+      val nextEl = (0 until b.numEls).map(_ => BigInt(0)).toArray
+      simBramsRead.append(nextEl)
+      simBramsWrite.append(nextEl)
+    }
+
+    var inputWord: BigInt = null
+
+    def genSimBits(b: StreamBits): BigInt = {
+      b match {
+        case l: Literal => l.l
+        case a: Add => genSimBits(a.first) + genSimBits(a.second)
+        case s: Subtract => genSimBits(s.first) - genSimBits(s.second)
+        case c: Concat => {
+          val secondBits = genSimBits(c.second)
+          (genSimBits(c.first) << secondBits.bitLength) | secondBits
+        }
+        case i: StreamInput => inputWord
+        case s: BitSelect => {
+          val numBits = s.upper - s.lower + 1
+          val mask = ((BigInt(1) << numBits) - 1) << s.lower
+          genSimBits(s.arg) & mask
+        }
+        case r: StreamReg => simRegsRead(r.stateId)
+        case b: BRAMSelect => simBramsRead(b.arg.stateId)(genSimBits(b.idx).toInt)
+        case v: VectorRegSelect => simVectorRegsRead(v.arg.stateId)(genSimBits(v.idx).toInt)
+        case b: StreamBool => genSimBool(b) // treat the bool as regular bits
+        case _ => throw new StreamException("unexpected type in genSimBits: " + b.getClass.toString)
+      }
+    }
+
+    def genSimBool(b: StreamBool): Boolean = {
+      b match {
+        case n: Negate => !genSimBool(n.arg)
+        case a: And => genSimBool(a.arg1) && genSimBool(a.arg2)
+        case o: Or => genSimBool(o.arg1) || genSimBool(o.arg2)
+        case c: BoolCast => genSimBits(c.arg) != 0
+        case e: Equal => genSimBits(e.first) == genSimBits(e.second)
+        case n: NotEqual => genSimBits(n.first) != genSimBits(n.second)
+        case l: LessThan => genSimBits(l.first) < genSimBits(l.second)
+        case l: LessThanEqual => genSimBits(l.first) <= genSimBits(l.second)
+        case g: GreaterThan => genSimBits(g.first) > genSimBits(g.second)
+        case g: GreaterThanEqual => genSimBits(g.first) >= genSimBits(g.second)
+        case _ => throw new StreamException("unexpected type in genSimBool: " + b.getClass.toString)
+      }
+    }
+
+    var numOutputBits = 0
+    val outputWords = new ArrayBuffer[BigInt]
+    for (i <- 0 until numInputBits by inputWidth) {
+      inputWord = (inputBits(i / inputBlockSize) >> (i % inputBlockSize)) & ((BigInt(1) << inputWidth) - 1)
+      for ((cond, a) <- assignments) {
+        if (genSimBool(cond)) {
+          a.lhs match {
+            case r: StreamReg => simRegsWrite(r.stateId) = genSimBits(a.rhs)
+            case v: VectorRegSelect => simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) = genSimBits(a.rhs)
+            case b: BRAMSelect => simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) = genSimBits(a.rhs)
+            case _ =>
+          }
+        }
+      }
+      for ((cond, e) <- emits) {
+        if (genSimBool(cond)) {
+          numOutputBits += outputWidth
+          outputWords.append(genSimBits(e.data))
+        }
+      }
+      // swap buffers
+      val simRegsTemp = simRegsRead
+      simRegsRead = simRegsWrite
+      simRegsWrite = simRegsTemp
+      val simVectorRegsTemp = simVectorRegsRead
+      simVectorRegsRead = simVectorRegsWrite
+      simVectorRegsWrite = simVectorRegsTemp
+      val simBramsTemp = simBramsRead
+      simBramsRead = simBramsWrite
+      simBramsWrite = simBramsTemp
+    }
+    (numOutputBits, outputWidth, outputWords.toArray)
+  }
+
 }

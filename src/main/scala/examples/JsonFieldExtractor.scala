@@ -85,7 +85,7 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
   // expecting comma (5)
   val inStringValue = StreamReg(1, false)
   val lastChar = StreamReg(8, ' '.toInt)
-  val nestDepth = StreamReg(util.log2Ceil(maxNestDepth), 0)
+  val nestDepth = StreamReg(util.log2Ceil(maxNestDepth + 1), 0)
   val parseState = StreamReg(util.log2Ceil(numParseStates), 3)
   val matchState = StreamReg(stateBits, 0)
   val seqTransVec = StreamVectorReg(stateBits + 8, sequentialTransitions.length, sequentialTransitions)
@@ -117,14 +117,11 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
   }
   swhen (parseState === 4.L) {
     swhen (inStringValue.B) {
+      Emit(0, StreamInput(0))
       swhen (StreamInput(0) === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
-        parseState := 5.L
-        popStateStack
         inStringValue := false.L
-      } .otherwise {
-        Emit(0, StreamInput(0))
       }
-    } .otherwise {
+    } .elsewhen (StreamInput(0) =/= '}'.toInt.L) {
       swhen (StreamInput(0) === ','.toInt.L) {
         parseState := 0.L
         popStateStack
@@ -145,8 +142,8 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
       parseState := 3.L
     } .otherwise {
       parseState := 5.L
-      popStateStack
     }
+    popStateStack
     nestDepth := nestDepth - 1.L
   }
 
@@ -193,4 +190,6 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
     parseState := 3.L
   }
   lastChar := StreamInput(0)
+
+  Builder.curBuilder.compile()
 }

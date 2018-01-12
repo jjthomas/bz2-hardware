@@ -195,6 +195,21 @@ object Launcher {
             new StreamingWrapperTests(c, inputs, outputs)
           }
         }
+      },
+      "StreamingWrapper7" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new JsonFieldExtractor(Array(Array("f1")), 1, coreId)),
+          backendName) {
+          (c) => {
+            val inputs = Array(Util.charsToBits("{\"f1\":1}".toCharArray, 512),
+              Util.charsToBits("{}".toCharArray, 512), Util.charsToBits("{}".toCharArray, 512),
+              Util.charsToBits("{}".toCharArray, 512))
+            val outputs = Array(Util.charsToBits("1,".toCharArray, 512),
+              Util.charsToBits("".toCharArray, 512), Util.charsToBits("".toCharArray, 512),
+              Util.charsToBits("".toCharArray, 512))
+            new StreamingWrapperTests(c, inputs, outputs)
+          }
+        }
       }
   )
   def main(args: Array[String]): Unit = {
