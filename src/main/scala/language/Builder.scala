@@ -337,8 +337,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         case i: StreamInput => inputWord
         case s: BitSelect => {
           val numBits = s.upper - s.lower + 1
-          val mask = ((BigInt(1) << numBits) - 1) << s.lower
-          genSimBits(s.arg) & mask
+          (genSimBits(s.arg) >> s.lower) & ((BigInt(1) << numBits) - 1)
         }
         case r: StreamReg => simRegsRead(r.stateId)
         case b: BRAMSelect => simBramsRead(b.arg.stateId)(genSimBits(b.idx).toInt)

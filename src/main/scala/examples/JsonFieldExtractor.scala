@@ -105,19 +105,25 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
     }
   }
 
+  def emitCurToken = {
+    swhen (matchState === curStateId.L) {
+      Emit(0, StreamInput(0))
+    }
+  }
+
   swhen (parseState === 3.L) {
     swhen (StreamInput(0) === '{'.toInt.L) {
       parseState := 0.L
       nestDepth := nestDepth + 1.L
     } .elsewhen (nestDepth =/= 0.L && !isWhitespace(StreamInput(0))) { // at nestDepth of 0 we only accept new records
-      Emit(0, StreamInput(0))
+      emitCurToken
       parseState := 4.L
       inStringValue := StreamInput(0) === '"'.toInt.L
     }
   }
   swhen (parseState === 4.L) {
     swhen (inStringValue.B) {
-      Emit(0, StreamInput(0))
+      emitCurToken
       swhen (StreamInput(0) === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
         inStringValue := false.L
       }
@@ -129,7 +135,7 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
         parseState := 5.L
         popStateStack
       } .otherwise {
-        Emit(0, StreamInput(0))
+        emitCurToken
       }
     }
   }
