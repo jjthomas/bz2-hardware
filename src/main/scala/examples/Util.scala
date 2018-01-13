@@ -16,7 +16,7 @@ object Util {
     (chars.length * 8, buf.toArray)
   }
 
-  def bitsToChars(numBits: Int, bits: Array[BigInt], bramLineSize: Int): Array[Char] = {
+  def bitsToChars(numBits: Int, bramLineSize: Int, bits: Array[BigInt]): Array[Char] = {
     assert(numBits % 8 == 0)
     val bytesInLine = bramLineSize / 8
     val buf = new ArrayBuffer[Char]

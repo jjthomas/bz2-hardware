@@ -1,9 +1,12 @@
 package language
 
+import java.io.{PrintWriter, File}
+
 import chisel3._
 import examples.{DualPortBRAM, ProcessingUnitIO}
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
 class StreamException(message: String, cause: Throwable = null) extends Exception(message, cause)
 
@@ -297,25 +300,25 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     assert(numInputBits % inputWidth == 0)
     assert(inputBlockSize % inputWidth == 0)
 
-    var simRegsRead = new ArrayBuffer[BigInt]
-    var simVectorRegsRead = new ArrayBuffer[Array[BigInt]]
-    var simBramsRead = new ArrayBuffer[Array[BigInt]]
-    var simRegsWrite = new ArrayBuffer[BigInt]
-    var simVectorRegsWrite = new ArrayBuffer[Array[BigInt]]
-    var simBramsWrite = new ArrayBuffer[Array[BigInt]]
+    val simRegsRead = new ArrayBuffer[BigInt]
+    val simVectorRegsRead = new ArrayBuffer[Array[BigInt]]
+    val simBramsRead = new ArrayBuffer[Array[BigInt]]
+    val simRegsWrite = new ArrayBuffer[BigInt]
+    val simVectorRegsWrite = new ArrayBuffer[Array[BigInt]]
+    val simBramsWrite = new ArrayBuffer[Array[BigInt]]
 
     for (r <- regs) {
-      val nextEl = if (r.init != null) r.init else BigInt(0)
+      val nextEl = if (r.init != null) r.init else BigInt(Random.nextInt())
       simRegsRead.append(nextEl)
       simRegsWrite.append(nextEl)
     }
     for (v <- vectorRegs) {
-      val nextEl = if (v.init != null) v.init.toArray else (0 until v.numEls).map(_ => BigInt(0)).toArray
+      val nextEl = if (v.init != null) v.init.toArray else (0 until v.numEls).map(_ => BigInt(Random.nextInt())).toArray
       simVectorRegsRead.append(nextEl)
       simVectorRegsWrite.append(nextEl)
     }
     for (b <- brams) {
-      val nextEl = (0 until b.numEls).map(_ => BigInt(0)).toArray
+      val nextEl = (0 until b.numEls).map(_ => BigInt(Random.nextInt())).toArray
       simBramsRead.append(nextEl)
       simBramsWrite.append(nextEl)
     }
@@ -329,7 +332,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         case s: Subtract => genSimBits(s.first) - genSimBits(s.second)
         case c: Concat => {
           val secondBits = genSimBits(c.second)
-          (genSimBits(c.first) << secondBits.bitLength) | secondBits
+          (genSimBits(c.first) << c.second.getWidth) | secondBits
         }
         case i: StreamInput => inputWord
         case s: BitSelect => {
@@ -381,18 +384,31 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
           outputWords.append(genSimBits(e.data))
         }
       }
-      // swap buffers
-      val simRegsTemp = simRegsRead
-      simRegsRead = simRegsWrite
-      simRegsWrite = simRegsTemp
-      val simVectorRegsTemp = simVectorRegsRead
-      simVectorRegsRead = simVectorRegsWrite
-      simVectorRegsWrite = simVectorRegsTemp
-      val simBramsTemp = simBramsRead
-      simBramsRead = simBramsWrite
-      simBramsWrite = simBramsTemp
+      for (i <- 0 until simRegsWrite.length) {
+        simRegsRead(i) = simRegsWrite(i)
+      }
+      for (i <- 0 until simVectorRegsWrite.length) {
+        for (j <- 0 until simVectorRegsWrite(i).length) {
+          simVectorRegsRead(i)(j) = simVectorRegsWrite(i)(j)
+        }
+      }
+      for (i <- 0 until simBramsWrite.length) {
+        for (j <- 0 until simBramsWrite(i).length) {
+          simBramsRead(i)(j) = simBramsWrite(i)(j)
+        }
+      }
     }
     (numOutputBits, outputWidth, outputWords.toArray)
+  }
+
+  def genCSim(outputFile: File): Unit = {
+    val pw = new PrintWriter(outputFile)
+    assert(util.log2Ceil(inputWidth) <= 6) // can't have input word greater than 64 bits
+    val cInputWidth = 1 << util.log2Ceil(inputWidth)
+    pw.write(s"void run(uint${cInputWidth}_t *input, int inputLen) {")
+
+    pw.write("}")
+    pw.close()
   }
 
 }

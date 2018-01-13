@@ -2,9 +2,19 @@
 package examples
 
 import chisel3.iotesters.{PeekPokeTester, Driver, ChiselFlatSpec}
+import language.Builder
 import utils.TutorialRunner
 
 object Launcher {
+  def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String]): StreamingWrapperTests = {
+    val testInputs = inputs.map(o => Util.charsToBits(o.toCharArray, c.bramLineSize))
+    for (((numInputBits, inputBits), expectedOutput) <- testInputs.zip(outputs)) {
+      val output = Builder.curBuilder.simulate(numInputBits, c.bramLineSize, inputBits)
+      assert(String.valueOf(Util.bitsToChars(output._1, output._2, output._3)) == expectedOutput)
+    }
+    val testOutputs = outputs.map(o => Util.charsToBits(o.toCharArray, c.bramLineSize))
+    new StreamingWrapperTests(c, testInputs, testOutputs)
+  }
   val examples = Map(
       "Combinational" -> { (backendName: String) =>
         Driver(() => new Combinational(), backendName) {
@@ -131,9 +141,8 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 63).map(j => (i + j).toChar).toArray,
-              512)).toArray
-            new StreamingWrapperTests(c, inputs, inputs)
+            val inputs = (0 until 4).map(i => String.valueOf((0 until 63).map(j => (i + j).toChar))).toArray
+            runStreamingTest(c, inputs, inputs)
           }
         }
       },
@@ -142,9 +151,8 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 65).map(j => (i + j).toChar).toArray,
-              512)).toArray
-            new StreamingWrapperTests(c, inputs, inputs)
+            val inputs = (0 until 4).map(i => String.valueOf((0 until 65).map(j => (i + j).toChar))).toArray
+            runStreamingTest(c, inputs, inputs)
           }
         }
       },
@@ -153,9 +161,8 @@ object Launcher {
           8, 2, 2, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 8).map(i => Util.charsToBits((0 until 67).map(j => (i + j).toChar).toArray,
-              512)).toArray
-            new StreamingWrapperTests(c, inputs, inputs)
+            val inputs = (0 until 8).map(i => String.valueOf((0 until 67).map(j => (i + j).toChar))).toArray
+            runStreamingTest(c, inputs, inputs)
           }
         }
       },
@@ -164,9 +171,8 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 16, (coreId: Int) => new PassThrough(16, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 62).map(j => (i + j).toChar).toArray,
-              512)).toArray
-            new StreamingWrapperTests(c, inputs, inputs)
+            val inputs = (0 until 4).map(i => String.valueOf((0 until 62).map(j => (i + j).toChar))).toArray
+            runStreamingTest(c, inputs, inputs)
           }
         }
       },
@@ -175,9 +181,8 @@ object Launcher {
           1000000000L), 4, 1, 1, 32, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
-            val inputs = (0 until 4).map(i => Util.charsToBits((0 until 128).map(j => (i + j).toChar).toArray,
-              1024)).toArray
-            new StreamingWrapperTests(c, inputs, inputs)
+            val inputs = (0 until 4).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar))).toArray
+            runStreamingTest(c, inputs, inputs)
           }
         }
       },
@@ -186,28 +191,21 @@ object Launcher {
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array(Util.charsToBits("1111\"2,2\",21112\n1,2".toCharArray, 512),
-              Util.charsToBits("1,21112".toCharArray, 512), Util.charsToBits("111,21112".toCharArray, 512),
-              Util.charsToBits("11,21112".toCharArray, 512))
-            val outputs = Array(Util.charsToBits("1111\"2,2\",1,".toCharArray, 512),
-              Util.charsToBits("1,".toCharArray, 512), Util.charsToBits("111,".toCharArray, 512),
-              Util.charsToBits("11,".toCharArray, 512))
-            new StreamingWrapperTests(c, inputs, outputs)
+            val inputs = Array("1111\"2,2\",21112\n1,2", "1,21112", "111,21112", "11,21112")
+            val outputs = Array("1111\"2,2\",1,", "1,", "111,", "11,")
+            runStreamingTest(c, inputs, outputs)
           }
         }
       },
       "StreamingWrapper7" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) => new JsonFieldExtractor(Array(Array("f1")), 1, coreId)),
+          1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) =>
+          new JsonFieldExtractor(Array(Array("f1")), 1, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array(Util.charsToBits("{\"f1\":1}".toCharArray, 512),
-              Util.charsToBits("{}".toCharArray, 512), Util.charsToBits("{}".toCharArray, 512),
-              Util.charsToBits("{}".toCharArray, 512))
-            val outputs = Array(Util.charsToBits("1,".toCharArray, 512),
-              Util.charsToBits("".toCharArray, 512), Util.charsToBits("".toCharArray, 512),
-              Util.charsToBits("".toCharArray, 512))
-            new StreamingWrapperTests(c, inputs, outputs)
+            val inputs = Array("{\"f1\":1}", "{}", "{}", "{}")
+            val outputs = Array("1,", "", "", "")
+            runStreamingTest(c, inputs, outputs)
           }
         }
       }
