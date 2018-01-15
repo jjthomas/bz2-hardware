@@ -1,6 +1,8 @@
 // See LICENSE.txt for license details.
 package examples
 
+import java.io.File
+
 import chisel3.iotesters.{PeekPokeTester, Driver, ChiselFlatSpec}
 import language.Builder
 import utils.TutorialRunner
@@ -193,6 +195,7 @@ object Launcher {
           (c) => {
             val inputs = Array("1111\"2,2\",21112\n1,2", "1,21112", "111,21112", "11,21112")
             val outputs = Array("1111\"2,2\",1,", "1,", "111,", "11,")
+            Builder.curBuilder.genCSim(new File("csv_field_extractor.c"))
             runStreamingTest(c, inputs, outputs)
           }
         }
@@ -205,6 +208,7 @@ object Launcher {
           (c) => {
             val inputs = Array("{\"f1\":1}", "{}", "{}", "{}")
             val outputs = Array("1,", "", "", "")
+            Builder.curBuilder.genCSim(new File("json_field_extractor.c"))
             runStreamingTest(c, inputs, outputs)
           }
         }

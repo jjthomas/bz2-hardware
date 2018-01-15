@@ -405,7 +405,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     val pw = new PrintWriter(outputFile)
     def writeLine(line: String): Unit = {
       if (line.endsWith("}") || line.endsWith("};")) {
-        indentLevel -= 1
+        indentLevel = if (indentLevel == 0) 0 else indentLevel - 1
       }
       for (i <- 0 until indentLevel) {
         pw.write("  ")
@@ -425,7 +425,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     val vectorElsPerLine = 10
     def getCWidthForBitWidth(bitWidth: Int): Int = {
       assert(bitWidth <= 64)
-      1 << util.log2Ceil(Math.max(bitWidth, 3))
+      1 << Math.max(util.log2Ceil(bitWidth), 3)
     }
     def getCRandForBitWidth(bitWidth: Int): BigInt = {
       val cWidth = getCWidthForBitWidth(bitWidth)
@@ -449,7 +449,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         }
         val elCWidth = getCWidthForBitWidth(width)
         for (rw <- Array("read", "write")) {
-          cw.writeLine(s"uint${elCWidth}_t ${name}${i}_$rw = {")
+          cw.writeLine(s"uint${elCWidth}_t ${name}${i}_$rw[] = {")
           for (j <- 0 until numEls by vectorElsPerLine) {
             var line = ""
             for (k <- j until Math.min(j + vectorElsPerLine, numEls)) {
@@ -483,7 +483,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
         case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
         case i: StreamInput => "input[i]"
-        case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}}) - 1))"
+        case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
         case r: StreamReg => s"reg${r.stateId}_read"
         case b: BRAMSelect => s"bram${b.arg.stateId}_read[${genCBits(b.idx)}]"
         case v: VectorRegSelect => s"vec${v.arg.stateId}_read[${genCBits(v.idx)}]"
@@ -511,6 +511,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     val cw = new CWriter(outputFile)
     val cInputWidth = getCWidthForBitWidth(inputWidth)
     val cOutputWidth = getCWidthForBitWidth(outputWidth)
+    cw.writeLine(
+      s"""#include <stdint.h>
+         |#include <stdlib.h>
+         |#include <stdio.h>
+         |#include <sys/time.h>\n""".stripMargin)
     cw.writeLine(s"uint32_t run(uint${cInputWidth}_t *input, uint32_t input_len, uint${cOutputWidth}_t *output) {")
     cw.writeLine("uint32_t output_count = 0;")
     for ((r, i) <- regs.zipWithIndex) {
@@ -546,6 +551,26 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     cw.writeLine("}")
     cw.writeLine("return output_count;")
     cw.writeLine("}")
+    cw.writeLine(
+      s"""
+         |int main() {
+         |  uint32_t LEN = 1 << 25;
+         |  uint8_t *input = (uint8_t *)malloc(LEN);
+         |  uint8_t *output = (uint8_t *)malloc(LEN);
+         |  for (uint32_t i = 0; i < LEN; i++) {
+         |    input[i] = rand() % 256;
+         |    output[i] = 0;
+         |  }
+         |  struct timeval start, end, diff;
+         |  gettimeofday(&start, 0);
+         |  uint32_t output_count = run((uint${cInputWidth}_t *)input, LEN / ${cInputWidth / 8},
+         |    (uint${cOutputWidth}_t *)output);
+         |  gettimeofday(&end, 0);
+         |  timersub(&end, &start, &diff);
+         |  double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
+         |  printf("%.2f MB/s, %d output tokens\\n", LEN / 1000000.0 / secs, output_count);
+         |  return 0;
+         |}\n""".stripMargin)
     cw.close()
   }
 
