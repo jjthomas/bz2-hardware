@@ -400,14 +400,153 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     (numOutputBits, outputWidth, outputWords.toArray)
   }
 
-  def genCSim(outputFile: File): Unit = {
+  class CWriter(outputFile: File) {
+    var indentLevel = 0
     val pw = new PrintWriter(outputFile)
-    assert(util.log2Ceil(inputWidth) <= 6) // can't have input word greater than 64 bits
-    val cInputWidth = 1 << util.log2Ceil(inputWidth)
-    pw.write(s"void run(uint${cInputWidth}_t *input, int inputLen) {")
+    def writeLine(line: String): Unit = {
+      if (line.endsWith("}") || line.endsWith("};")) {
+        indentLevel -= 1
+      }
+      for (i <- 0 until indentLevel) {
+        pw.write("  ")
+      }
+      pw.write(line + "\n")
+      if (line.endsWith("{")) {
+        indentLevel += 1
+      }
+    }
 
-    pw.write("}")
-    pw.close()
+    def close(): Unit = {
+      pw.close()
+    }
+  }
+
+  def genCSim(outputFile: File): Unit = {
+    val vectorElsPerLine = 10
+    def getCWidthForBitWidth(bitWidth: Int): Int = {
+      assert(bitWidth <= 64)
+      1 << util.log2Ceil(Math.max(bitWidth, 3))
+    }
+    def getCRandForBitWidth(bitWidth: Int): BigInt = {
+      val cWidth = getCWidthForBitWidth(bitWidth)
+      cWidth match {
+        case 8 => Random.nextInt() & ((1 << 8) - 1)
+        case 16 => Random.nextInt() & ((1 << 16) - 1)
+        case 32 => Random.nextInt()
+        case 64 => Random.nextLong()
+      }
+    }
+    def cStringForValue(value: BigInt): String = {
+      assert(value <= Long.MaxValue)
+      value.toLong + (if (value > Integer.MAX_VALUE) "L" else "")
+    }
+    def emitVectorInit(cw: CWriter, vectors: ArrayBuffer[Any]): Unit = {
+      for ((v, i) <- vectors.zipWithIndex) {
+        val (width, numEls, init, name) = v match {
+          case vec: StreamVectorReg => (vec.width, vec.numEls, vec.init, "vec")
+          case bram: StreamBRAM => (bram.width, bram.numEls, null, "bram")
+          case _ => throw new StreamException("unexpected type in emitVectorInit: " + v.getClass.toString)
+        }
+        val elCWidth = getCWidthForBitWidth(width)
+        for (rw <- Array("read", "write")) {
+          cw.writeLine(s"uint${elCWidth}_t ${name}${i}_$rw = {")
+          for (j <- 0 until numEls by vectorElsPerLine) {
+            var line = ""
+            for (k <- j until Math.min(j + vectorElsPerLine, numEls)) {
+              val nextEl = if (init != null) cStringForValue(init(j + k))
+                else cStringForValue(getCRandForBitWidth(width))
+              line += s"${if (k == 0) "" else " "}$nextEl,"
+            }
+            cw.writeLine(line)
+          }
+          cw.writeLine("};")
+        }
+      }
+    }
+    def emitVectorWriteToRead(cw: CWriter, vectors: ArrayBuffer[Any]): Unit = {
+      for ((v, i) <- vectors.zipWithIndex) {
+        val (numEls, name) = v match {
+          case vec: StreamVectorReg => (vec.numEls, "vec")
+          case bram: StreamBRAM => (bram.numEls, "bram")
+          case _ => throw new StreamException("unexpected type in emitVectorWriteToRead: " + v.getClass.toString)
+        }
+        cw.writeLine(s"for (uint32_t j = 0; j < $numEls; j++) {")
+        cw.writeLine(s"${name}${i}_read[j] = ${name}${i}_write[j];")
+        cw.writeLine("}")
+      }
+    }
+    def genCBits(b: StreamBits): String = {
+      assert(b.getWidth <= 64)
+      b match {
+        case l: Literal => cStringForValue(l.l)
+        case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
+        case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
+        case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
+        case i: StreamInput => "input[i]"
+        case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}}) - 1))"
+        case r: StreamReg => s"reg${r.stateId}_read"
+        case b: BRAMSelect => s"bram${b.arg.stateId}_read[${genCBits(b.idx)}]"
+        case v: VectorRegSelect => s"vec${v.arg.stateId}_read[${genCBits(v.idx)}]"
+        case b: StreamBool => genCBool(b) // treat the bool as regular bits
+        case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
+      }
+    }
+
+    def genCBool(b: StreamBool): String = {
+      b match {
+        case n: Negate => s"!${genCBool(n.arg)}"
+        case a: And => s"(${genCBool(a.arg1)} && ${genCBool(a.arg2)})"
+        case o: Or => s"(${genCBool(o.arg1)} || ${genCBool(o.arg2)})"
+        case c: BoolCast => genCBits(c.arg)
+        case e: Equal => s"(${genCBits(e.first)} == ${genCBits(e.second)})"
+        case n: NotEqual => s"(${genCBits(n.first)} != ${genCBits(n.second)})"
+        case l: LessThan => s"(${genCBits(l.first)} < ${genCBits(l.second)})"
+        case l: LessThanEqual => s"(${genCBits(l.first)} <= ${genCBits(l.second)})"
+        case g: GreaterThan => s"(${genCBits(g.first)} > ${genCBits(g.second)})"
+        case g: GreaterThanEqual => s"(${genCBits(g.first)} >= ${genCBits(g.second)})"
+        case _ => throw new StreamException("unexpected type in genCBool: " + b.getClass.toString)
+      }
+    }
+
+    val cw = new CWriter(outputFile)
+    val cInputWidth = getCWidthForBitWidth(inputWidth)
+    val cOutputWidth = getCWidthForBitWidth(outputWidth)
+    cw.writeLine(s"uint32_t run(uint${cInputWidth}_t *input, uint32_t input_len, uint${cOutputWidth}_t *output) {")
+    cw.writeLine("uint32_t output_count = 0;")
+    for ((r, i) <- regs.zipWithIndex) {
+      val init = if (r.init != null) r.init else getCRandForBitWidth(r.width)
+      val cWidth = getCWidthForBitWidth(r.width)
+      for (rw <- Array("read", "write")) {
+        cw.writeLine(s"uint${cWidth}_t reg${i}_$rw = ${cStringForValue(init)};")
+      }
+    }
+    emitVectorInit(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
+    emitVectorInit(cw, brams.asInstanceOf[ArrayBuffer[Any]])
+    cw.writeLine("for (uint32_t i = 0; i < input_len; i++) {")
+    for ((cond, a) <- assignments) {
+      cw.writeLine(s"if (${genCBool(cond)}) {")
+      a.lhs match {
+        case r: StreamReg => cw.writeLine(s"reg${r.stateId}_write = ${genCBits(a.rhs)};")
+        case v: VectorRegSelect => cw.writeLine(s"vec${v.arg.stateId}_write[${genCBits(v.idx)}] = ${genCBits(a.rhs)};")
+        case b: BRAMSelect => cw.writeLine(s"bram${b.arg.stateId}_write[${genCBits(b.idx)}] = ${genCBits(a.rhs)};")
+        case _ =>
+      }
+      cw.writeLine("}")
+    }
+    for ((cond, e) <- emits) {
+      cw.writeLine(s"if (${genCBool(cond)}) {")
+      cw.writeLine(s"output[output_count++] = ${genCBits(e.data)};")
+      cw.writeLine("}")
+    }
+    for (i <- 0 until regs.length) {
+      cw.writeLine(s"reg${i}_read = reg${i}_write")
+    }
+    emitVectorWriteToRead(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
+    emitVectorWriteToRead(cw, brams.asInstanceOf[ArrayBuffer[Any]])
+    cw.writeLine("}")
+    cw.writeLine("return output_count;")
+    cw.writeLine("}")
+    cw.close()
   }
 
 }
