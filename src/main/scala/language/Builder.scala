@@ -539,7 +539,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       cw.writeLine("}")
     }
     for (i <- 0 until regs.length) {
-      cw.writeLine(s"reg${i}_read = reg${i}_write")
+      cw.writeLine(s"reg${i}_read = reg${i}_write;")
     }
     emitVectorWriteToRead(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
     emitVectorWriteToRead(cw, brams.asInstanceOf[ArrayBuffer[Any]])
