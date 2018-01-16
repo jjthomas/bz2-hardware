@@ -135,9 +135,6 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
       swhen (StreamInput(0) === ','.toInt.L) {
         parseState := EXP_KEY.id.L
         popStateStack
-      } .elsewhen (isWhitespace(StreamInput(0))) {
-        parseState := EXP_COM.id.L
-        popStateStack
       } .otherwise {
         emitCurToken
       }
@@ -145,6 +142,7 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
   }
   swhen (StreamInput(0) === ','.toInt.L && parseState === EXP_COM.id.L) {
     parseState := EXP_KEY.id.L
+    popStateStack
   }
   swhen (StreamInput(0) === '}'.toInt.L &&
     (parseState === EXP_KEY.id.L || parseState === EXP_COM.id.L || (parseState === IN_VAL.id.L && !inStringValue.B))) {
@@ -153,7 +151,9 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
     } .otherwise {
       parseState := EXP_COM.id.L
     }
-    popStateStack
+    swhen (parseState === EXP_COM.id.L || parseState === IN_VAL.id.L) {
+      popStateStack
+    }
     nestDepth := nestDepth - 1.L
   }
 
