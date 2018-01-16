@@ -81,12 +81,16 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
     }
   }
 
-  val numParseStates = 6 // expecting key (0), in key (1), expecting colon (2), expecting value (3), in value (4),
-  // expecting comma (5)
+  object ParseState extends Enumeration {
+    type ParseState = Value
+    val EXP_KEY, IN_KEY, EXP_COL, EXP_VAL, IN_VAL, EXP_COM = Value
+  }
+  import ParseState._
+
   val inStringValue = StreamReg(1, false)
   val lastChar = StreamReg(8, ' '.toInt)
   val nestDepth = StreamReg(util.log2Ceil(maxNestDepth + 1), 0)
-  val parseState = StreamReg(util.log2Ceil(numParseStates), 3)
+  val parseState = StreamReg(util.log2Ceil(ParseState.maxId), EXP_VAL.id)
   val matchState = StreamReg(stateBits, 0)
   val seqTransVec = StreamVectorReg(stateBits + 8, sequentialTransitions.length, sequentialTransitions)
   val splitTransVec = if (splitTransitions.length > 0)
@@ -111,17 +115,17 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
     }
   }
 
-  swhen (parseState === 3.L) {
+  swhen (parseState === EXP_VAL.id.L) {
     swhen (StreamInput(0) === '{'.toInt.L) {
-      parseState := 0.L
+      parseState := EXP_KEY.id.L
       nestDepth := nestDepth + 1.L
     } .elsewhen (nestDepth =/= 0.L && !isWhitespace(StreamInput(0))) { // at nestDepth of 0 we only accept new records
       emitCurToken
-      parseState := 4.L
+      parseState := IN_VAL.id.L
       inStringValue := StreamInput(0) === '"'.toInt.L
     }
   }
-  swhen (parseState === 4.L) {
+  swhen (parseState === IN_VAL.id.L) {
     swhen (inStringValue.B) {
       emitCurToken
       swhen (StreamInput(0) === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
@@ -129,39 +133,39 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
       }
     } .elsewhen (StreamInput(0) =/= '}'.toInt.L) {
       swhen (StreamInput(0) === ','.toInt.L) {
-        parseState := 0.L
+        parseState := EXP_KEY.id.L
         popStateStack
       } .elsewhen (isWhitespace(StreamInput(0))) {
-        parseState := 5.L
+        parseState := EXP_COM.id.L
         popStateStack
       } .otherwise {
         emitCurToken
       }
     }
   }
-  swhen (StreamInput(0) === ','.toInt.L && parseState === 5.L) {
-    parseState := 0.L
+  swhen (StreamInput(0) === ','.toInt.L && parseState === EXP_COM.id.L) {
+    parseState := EXP_KEY.id.L
   }
   swhen (StreamInput(0) === '}'.toInt.L &&
-    (parseState === 0.L || parseState === 5.L || (parseState === 4.L && !inStringValue.B))) {
+    (parseState === EXP_KEY.id.L || parseState === EXP_COM.id.L || (parseState === IN_VAL.id.L && !inStringValue.B))) {
     swhen (nestDepth === 1.L) {
-      parseState := 3.L
+      parseState := EXP_VAL.id.L
     } .otherwise {
-      parseState := 5.L
+      parseState := EXP_COM.id.L
     }
     popStateStack
     nestDepth := nestDepth - 1.L
   }
 
-  val enteringKey = StreamInput(0) === '"'.toInt.L && parseState === 0.L
+  val enteringKey = StreamInput(0) === '"'.toInt.L && parseState === EXP_KEY.id.L
   swhen (enteringKey) {
-    parseState := 1.L
+    parseState := IN_KEY.id.L
     stateStack(0) := matchState
     for (i <- 1 until stateStack.length) {
       stateStack(i) := stateStack(i - 1)
     }
   }
-  swhen ((parseState === 1.L || enteringKey) && matchState =/= curStateId.L &&
+  swhen ((parseState === IN_KEY.id.L || enteringKey) && matchState =/= curStateId.L &&
     (matchState =/= 0.L || nestDepth === 1.L)) { // only allow match to start at top level
     val selectedSeqEl = seqTransVec(matchState)
     swhen (StreamInput(0) === selectedSeqEl(stateBits + 7, stateBits)) {
@@ -184,11 +188,11 @@ class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int
       }
     }
   }
-  swhen (StreamInput(0) === '"'.toInt.L && parseState === 1.L) {
-    parseState := 2.L
+  swhen (StreamInput(0) === '"'.toInt.L && parseState === IN_KEY.id.L) {
+    parseState := EXP_COL.id.L
   }
-  swhen (StreamInput(0) === ':'.toInt.L && parseState === 2.L) {
-    parseState := 3.L
+  swhen (StreamInput(0) === ':'.toInt.L && parseState === EXP_COL.id.L) {
+    parseState := EXP_VAL.id.L
   }
   lastChar := StreamInput(0)
 
