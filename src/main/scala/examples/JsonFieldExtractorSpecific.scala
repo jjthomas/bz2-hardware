@@ -6,7 +6,8 @@ import scala.collection.mutable.HashMap
 import scala.collection.mutable.ArrayBuffer
 
 // fields must be bottom-level (i.e. non-record types), and must all be present in every input record
-class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId: Int) extends ProcessingUnit(8) {
+class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int,
+                                 coreId: Int) extends ProcessingUnit(8) {
   val fieldsQuoted = fields.map(f => f.map(id => "\"" + id.replace("\"", "\\\"") + "\""))
 
   val sequentialBranches = new ArrayBuffer[ArrayBuffer[Char]]
@@ -66,10 +67,9 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
       sequentialTransitions.append(trans)
     }
   }
-  val splitTransitions = new ArrayBuffer[(Int, ArrayBuffer[BigInt])] // (corresponding state ID, list of transitions)
+  val splitTransitions = new ArrayBuffer[BigInt]
   for (((seqBranch, seqIdx), splits) <- splitBranches.iterator) {
-    val curTrans = new ArrayBuffer[BigInt]
-    splitTransitions.append((sequentialStateIds(seqBranch) + seqIdx, curTrans))
+    val stateForSplit = sequentialStateIds(seqBranch) + seqIdx
     for ((c, nextBranch) <- splits) {
       var trans = BigInt(c.toInt) << stateBits
       if (nextBranch == -1) {
@@ -77,7 +77,7 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
       } else {
         trans |= sequentialStateIds(nextBranch)
       }
-      curTrans.append(trans)
+      splitTransitions.append((trans << stateBits) | stateForSplit)
     }
   }
 
@@ -89,8 +89,8 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
   val parseState = StreamReg(util.log2Ceil(numParseStates), 3)
   val matchState = StreamReg(stateBits, 0)
   val seqTransVec = StreamVectorReg(stateBits + 8, sequentialTransitions.length, sequentialTransitions)
-  val splitTransVecs = splitTransitions.map { case (stateId, trans) =>  (stateId,
-    StreamVectorReg(stateBits + 8, trans.length, trans)) }
+  val splitTransVec = if (splitTransitions.length > 0)
+    StreamVectorReg(2 * stateBits + 8, splitTransitions.length, splitTransitions) else null
   val stateStack = (0 until maxNestDepth).map(i => StreamReg(stateBits, null))
 
   def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
@@ -168,19 +168,14 @@ class JsonFieldExtractor(fields: Array[Array[String]], maxNestDepth: Int, coreId
       matchState := selectedSeqEl(stateBits - 1, 0)
     } .otherwise {
       var noSplit: StreamBool = true.L.B
-      for ((stateId, vec) <- splitTransVecs) {
-        noSplit = noSplit && !(matchState === stateId.L)
-        swhen (matchState === stateId.L) {
-          var noMatch: StreamBool = true.L.B
-          for (i <- 0 until vec.numEls) {
-            val selectedSplitEl = vec(i.L)
-            noMatch = noMatch && !(StreamInput(0) === selectedSplitEl(stateBits + 7, stateBits))
-            swhen (StreamInput(0) === selectedSplitEl(stateBits + 7, stateBits)) {
-              matchState := selectedSplitEl(stateBits - 1, 0)
-            }
-          }
-          swhen (noMatch) {
-            matchState := 0.L
+      if (splitTransVec != null) {
+        for (i <- 0 until splitTransVec.numEls) {
+          val selectedSplitEl = splitTransVec(i.L)
+          val splitMatch = matchState === selectedSplitEl(stateBits - 1, 0) &&
+            StreamInput(0) === selectedSplitEl(2 * stateBits + 7, 2 * stateBits)
+          noSplit = noSplit && !splitMatch
+          swhen(splitMatch) {
+            matchState := selectedSplitEl(2 * stateBits - 1, stateBits)
           }
         }
       }
