@@ -184,6 +184,7 @@ object Launcher {
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar))).toArray
+            Builder.curBuilder.genCSim(new File("pass_through.c"))
             runStreamingTest(c, inputs, inputs)
           }
         }

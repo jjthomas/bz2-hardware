@@ -568,7 +568,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
          |  gettimeofday(&end, 0);
          |  timersub(&end, &start, &diff);
          |  double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
-         |  printf("%.2f MB/s, %d output tokens\\n", LEN / 1000000.0 / secs, output_count);
+         |  printf("%.2f MB/s, %d output tokens, random output byte: %d\\n", LEN / 1000000.0 / secs, output_count,
+         |    output_count == 0 ? 0 : output[rand() % output_count]);
          |  return 0;
          |}\n""".stripMargin)
     cw.close()
