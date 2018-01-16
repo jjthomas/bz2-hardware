@@ -204,11 +204,11 @@ object Launcher {
       "StreamingWrapper7" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) =>
-          new JsonFieldExtractorSpecific(Array(Array("f1")), 1, coreId)),
+          new JsonFieldExtractorSpecific(Array(Array("a", "b"), Array("a", "d"), Array("x")), 2, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array("""{"f1":1}""", "{}", "{}", "{}")
-            val outputs = Array("1,", "", "", "")
+            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", "{}", "{}", "{}")
+            val outputs = Array("1,3,4,", "", "", "")
             Builder.curBuilder.genCSim(new File("json_field_extractor.c"))
             runStreamingTest(c, inputs, outputs)
           }
