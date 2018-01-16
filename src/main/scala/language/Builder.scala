@@ -325,15 +325,16 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
 
     var inputWord: BigInt = null
 
+    def truncate(b: BigInt, bits: Int): BigInt = {
+      b & ((BigInt(1) << bits) - 1)
+    }
+
     def genSimBits(b: StreamBits): BigInt = {
       b match {
         case l: Literal => l.l
         case a: Add => genSimBits(a.first) + genSimBits(a.second)
         case s: Subtract => genSimBits(s.first) - genSimBits(s.second)
-        case c: Concat => {
-          val secondBits = genSimBits(c.second)
-          (genSimBits(c.first) << c.second.getWidth) | secondBits
-        }
+        case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
         case i: StreamInput => inputWord
         case s: BitSelect => {
           val numBits = s.upper - s.lower + 1
@@ -370,9 +371,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       for ((cond, a) <- assignments) {
         if (genSimBool(cond)) {
           a.lhs match {
-            case r: StreamReg => simRegsWrite(r.stateId) = genSimBits(a.rhs)
-            case v: VectorRegSelect => simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) = genSimBits(a.rhs)
-            case b: BRAMSelect => simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) = genSimBits(a.rhs)
+            case r: StreamReg => simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
+            case v: VectorRegSelect => simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
+              truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
+            case b: BRAMSelect => simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
+              truncate(genSimBits(a.rhs), brams(b.arg.stateId).width)
             case _ =>
           }
         }
@@ -380,7 +383,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       for ((cond, e) <- emits) {
         if (genSimBool(cond)) {
           numOutputBits += outputWidth
-          outputWords.append(genSimBits(e.data))
+          outputWords.append(truncate(genSimBits(e.data), outputWidth))
         }
       }
       for (i <- 0 until simRegsWrite.length) {
