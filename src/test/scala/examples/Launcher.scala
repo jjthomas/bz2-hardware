@@ -4,6 +4,7 @@ package examples
 import java.io.File
 
 import chisel3.iotesters.{PeekPokeTester, Driver, ChiselFlatSpec}
+import examples.JsonFieldExtractor.{JsonFieldExtractorGeneric, JsonFieldExtractorSpecific}
 import language.Builder
 import utils.TutorialRunner
 
