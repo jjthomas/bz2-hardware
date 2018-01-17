@@ -488,8 +488,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         case i: StreamInput => "input[i]"
         case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
         case r: StreamReg => s"reg${r.stateId}_read"
-        case b: BRAMSelect => s"bram${b.arg.stateId}_read[${genCBits(b.idx)}]"
-        case v: VectorRegSelect => s"vec${v.arg.stateId}_read[${genCBits(v.idx)}]"
+        case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
+        case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
         case b: StreamBool => genCBool(b) // treat the bool as regular bits
         case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
       }
@@ -518,7 +518,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       s"""#include <stdint.h>
          |#include <stdlib.h>
          |#include <stdio.h>
-         |#include <sys/time.h>\n""".stripMargin)
+         |#include <sys/time.h>
+         |
+         |uint64_t min(uint64_t x, uint64_t y) { return x < y ? x : y; }\n""".stripMargin)
     cw.writeLine(s"uint32_t run(uint${cInputWidth}_t *input, uint32_t input_len, uint${cOutputWidth}_t *output) {")
     cw.writeLine("uint32_t output_count = 0;")
     for ((r, i) <- regs.zipWithIndex) {
@@ -535,8 +537,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       cw.writeLine(s"if (${genCBool(cond)}) {")
       a.lhs match {
         case r: StreamReg => cw.writeLine(s"reg${r.stateId}_write = ${genCBits(a.rhs)};")
-        case v: VectorRegSelect => cw.writeLine(s"vec${v.arg.stateId}_write[${genCBits(v.idx)}] = ${genCBits(a.rhs)};")
-        case b: BRAMSelect => cw.writeLine(s"bram${b.arg.stateId}_write[${genCBits(b.idx)}] = ${genCBits(a.rhs)};")
+        case v: VectorRegSelect =>
+          cw.writeLine(s"vec${v.arg.stateId}_write[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})] = ${genCBits(a.rhs)};")
+        case b: BRAMSelect =>
+          cw.writeLine(
+            s"bram${b.arg.stateId}_write[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})] = ${genCBits(a.rhs)};")
         case _ =>
       }
       cw.writeLine("}")
