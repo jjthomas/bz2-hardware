@@ -13,4 +13,7 @@ package object language {
   implicit class LongToLiteral(l: Long) {
     def L = Literal(l)
   }
+  implicit class BigIntToLiteral(b: BigInt) {
+    def L = Literal(b)
+  }
 }
