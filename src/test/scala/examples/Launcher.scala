@@ -10,12 +10,12 @@ import utils.TutorialRunner
 
 object Launcher {
   def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String]): StreamingWrapperTests = {
-    val testInputs = inputs.map(o => Util.charsToBits(o.toCharArray, c.bramLineSize))
+    val testInputs = inputs.map(i => Util.charsToBits(i.toCharArray))
     for (((numInputBits, inputBits), expectedOutput) <- testInputs.zip(outputs)) {
-      val output = Builder.curBuilder.simulate(numInputBits, c.bramLineSize, inputBits)
-      assert(String.valueOf(Util.bitsToChars(output._1, output._2, output._3)) == expectedOutput)
+      val (numOutputBits, outputBits) = Builder.curBuilder.simulate(numInputBits, inputBits)
+      assert(String.valueOf(Util.bitsToChars(numOutputBits, outputBits)) == expectedOutput)
     }
-    val testOutputs = outputs.map(o => Util.charsToBits(o.toCharArray, c.bramLineSize))
+    val testOutputs = outputs.map(o => Util.charsToBits(o.toCharArray))
     new StreamingWrapperTests(c, testInputs, testOutputs)
   }
   val examples = Map(

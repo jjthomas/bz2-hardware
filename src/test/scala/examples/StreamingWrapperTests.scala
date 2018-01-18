@@ -2,13 +2,14 @@ package examples
 
 import chisel3.iotesters.PeekPokeTester
 
-class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigInt])],
-                            outputs: Array[(Int, Array[BigInt])]) extends PeekPokeTester(c) {
+class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
+                            outputs: Array[(Int, BigInt)]) extends PeekPokeTester(c) {
   assert(inputs.length == c.numCores)
   assert(outputs.length == c.numCores)
   val bytesInLine = c.bramLineSize / 8
   val nativeLinesInLine = c.bramLineSize / 512
   val nativeLineMask = (BigInt(1) << 512) - 1
+  val bramLineMask = (BigInt(1) << c.bramLineSize) - 1
   val inputLines = new Array[Array[Int]](c.numInputChannels)
   val inputLinesCum = new Array[Array[Int]](c.numInputChannels)
   val outputLines = new Array[Array[Int]](c.numOutputChannels)
@@ -128,11 +129,12 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             val absoluteInputCore = inputCore + c.inputChannelBounds(i)
             val inputElement = lineInChannel - inputLinesCum(i)(inputCore)
             assert(inputElement == perCoreInputCounters(i)(inputCore) - 1)
+            val inputLine = (inputs(absoluteInputCore)._2 >> (inputElement * c.bramLineSize)) & bramLineMask
             for (j <- 0 until nativeLinesInLine) {
-              pushBlockToInputChannel((inputs(absoluteInputCore)._2(inputElement) >> (512 * j)) & nativeLineMask, i)
+              pushBlockToInputChannel((inputLine >> (512 * j)) & nativeLineMask, i)
             }
             perCoreInputCounters(i)(inputCore) += 1
-            inputs(absoluteInputCore)._2(inputElement)
+            inputLine
           }
         println("pushed valid input block to channel: " + i + ", core: " + inputCore + ", element: "
           + pushedBlock.toString(16))
@@ -184,7 +186,7 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
             outputs(absoluteOutputCore)._1 % c.bramLineSize > 0) {
             (BigInt(1) << (outputs(absoluteOutputCore)._1 % c.bramLineSize)) - 1
           } else {
-            (BigInt(1) << c.bramLineSize) - 1
+            bramLineMask
           }
         println("read valid output element from channel: " + i + ", core: " + outputCore + ", element: " +
           (outputLine & mask).toString(16))
@@ -192,7 +194,8 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, Array[BigIn
           assert(outputLine.toInt == outputs(absoluteOutputCore)._1)
         } else {
           val (_, inputCore) = getInputLocForOutputLoc(i, outputCore)
-          assert((outputLine & mask) == (outputs(absoluteOutputCore)._2(outputElement - 1) & mask))
+          assert((outputLine & mask) ==
+            ((outputs(absoluteOutputCore)._2 >> ((outputElement - 1) * c.bramLineSize)) & mask))
         }
         step(1)
         poke(c.io.outputMemBlockReadys(i), false)

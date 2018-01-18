@@ -296,9 +296,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
   }
 
-  def simulate(numInputBits: Int, inputBlockSize: Int, inputBits: Array[BigInt]): (Int, Int, Array[BigInt]) = {
+  def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
     assert(numInputBits % inputWidth == 0)
-    assert(inputBlockSize % inputWidth == 0)
 
     val simRegsRead = new ArrayBuffer[BigInt]
     val simVectorRegsRead = new ArrayBuffer[Array[BigInt]]
@@ -365,9 +364,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
 
     var numOutputBits = 0
-    val outputWords = new ArrayBuffer[BigInt]
+    var output = BigInt(0)
     for (i <- 0 until numInputBits by inputWidth) {
-      inputWord = (inputBits(i / inputBlockSize) >> (i % inputBlockSize)) & ((BigInt(1) << inputWidth) - 1)
+      inputWord = (inputBits >> i) & ((BigInt(1) << inputWidth) - 1)
       for ((cond, a) <- assignments) {
         if (genSimBool(cond)) {
           a.lhs match {
@@ -382,8 +381,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       }
       for ((cond, e) <- emits) {
         if (genSimBool(cond)) {
+          output = (truncate(genSimBits(e.data), outputWidth) << numOutputBits) | output
           numOutputBits += outputWidth
-          outputWords.append(truncate(genSimBits(e.data), outputWidth))
         }
       }
       for (i <- 0 until simRegsWrite.length) {
@@ -400,7 +399,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         }
       }
     }
-    (numOutputBits, outputWidth, outputWords.toArray)
+    (numOutputBits, output)
   }
 
   class CWriter(outputFile: File) {
