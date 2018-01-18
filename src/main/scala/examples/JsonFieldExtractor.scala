@@ -88,6 +88,26 @@ object JsonFieldExtractor {
     (sequentialTransitions, splitTransitions, curStateId)
   }
 
+  def genConfigBits(fields: Array[Array[String]], maxFieldChars: Int): (Int, BigInt) = {
+    val (seqTrans, splitTrans, maxStateId) = genTransitions(fields, maxFieldChars)
+    val stateBits = util.log2Ceil(maxStateId + 1)
+    val numBitsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8 * 8
+    var bits = BigInt(0)
+    var numBits = 0
+    val sentinel = (BigInt(1) << numBitsForConfigToken) - 1
+
+    def insertConfigTokens(tokens: Seq[BigInt]): Unit = {
+      for (t <- tokens ++ Array(sentinel)) {
+        bits = (t << numBits) | bits
+        numBits += numBitsForConfigToken
+      }
+    }
+
+    insertConfigTokens(seqTrans)
+    insertConfigTokens(splitTrans)
+    (numBits, bits)
+  }
+
   def genCircuit(seqTrans: Seq[BigInt], splitTrans: Seq[BigInt], maxMatchId: Int, maxFields: Int,
                  maxNestDepth: Int, coreId: Int): Unit = {
     object ParseState extends Enumeration {

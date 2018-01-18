@@ -9,14 +9,19 @@ import language.Builder
 import utils.TutorialRunner
 
 object Launcher {
-  def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String]): StreamingWrapperTests = {
-    val testInputs = inputs.map(i => Util.charsToBits(i.toCharArray))
-    for (((numInputBits, inputBits), expectedOutput) <- testInputs.zip(outputs)) {
+  def runStreamingTest(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
+                       outputs: Array[(Int, BigInt)]): StreamingWrapperTests = {
+    for (((numInputBits, inputBits), (expectedNumOutputBits, expectedOutputBits)) <- inputs.zip(outputs)) {
       val (numOutputBits, outputBits) = Builder.curBuilder.simulate(numInputBits, inputBits)
-      assert(String.valueOf(Util.bitsToChars(numOutputBits, outputBits)) == expectedOutput)
+      assert(numOutputBits == expectedNumOutputBits)
+      assert(outputBits == expectedOutputBits)
     }
-    val testOutputs = outputs.map(o => Util.charsToBits(o.toCharArray))
-    new StreamingWrapperTests(c, testInputs, testOutputs)
+    new StreamingWrapperTests(c, inputs, outputs)
+  }
+  def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String]): StreamingWrapperTests = {
+    val bitInputs = inputs.map(i => Util.charsToBits(i.toCharArray))
+    val bitOutputs = outputs.map(o => Util.charsToBits(o.toCharArray))
+    runStreamingTest(c, bitInputs, bitOutputs)
   }
   val examples = Map(
       "Combinational" -> { (backendName: String) =>
@@ -208,9 +213,27 @@ object Launcher {
           new JsonFieldExtractorSpecific(Array(Array("a", "b"), Array("a", "d"), Array("x")), 2, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", "{}", "{}", "{}")
-            val outputs = Array("1,3,4,", "", "", "")
-            Builder.curBuilder.genCSim(new File("json_field_extractor.c"))
+            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", """{"b":{"x":5},"x":4,"a":3}""", "{}", "{}")
+            val outputs = Array("1,3,4,", "4,", "", "")
+            Builder.curBuilder.genCSim(new File("json_field_extractor_specific.c"))
+            runStreamingTest(c, inputs, outputs)
+          }
+        }
+      },
+      "StreamingWrapper8" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) =>
+          new JsonFieldExtractorGeneric(100, 3, 2, coreId)), backendName) {
+          (c) => {
+            val (numConfigBits, configBits) = JsonFieldExtractor.genConfigBits(
+              Array(Array("a", "b"), Array("a", "d"), Array("x")), 100)
+            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", """{"b":{"x":5},"x":4,"a":3}""",
+              "{}", "{}").map(str => {
+              val (numStrBits, strBits) = Util.charsToBits(str.toCharArray)
+              (numConfigBits + numStrBits, (strBits << numConfigBits) | configBits)
+            })
+            val outputs = Array("1,3,4,", "4,", "", "").map(str => Util.charsToBits(str.toCharArray))
+            Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"))
             runStreamingTest(c, inputs, outputs)
           }
         }
