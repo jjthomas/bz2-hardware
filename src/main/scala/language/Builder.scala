@@ -182,10 +182,17 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       bramReads(i) = new ArrayBuffer[(StreamBool, StreamBits)]
       bramWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
     }
+    def assignIdxOr0(a: AssignableStreamData): StreamBits = {
+      a match {
+        case v: VectorRegSelect => v.idx
+        case b: BRAMSelect => b.idx
+        case _ => 0.L
+      }
+    }
     val pipeDepth = Array(
-      (assignments.map { case (_, a) => readDepth(a.rhs) } ++ Array(0)).max,
+      (assignments.map { case (_, a) => Math.max(readDepth(assignIdxOr0(a.lhs)), readDepth(a.rhs)) } ++ Array(0)).max,
       (emits.map { case (_, e) => readDepth(e.data) } ++ Array(0)).max,
-      (conds.map { case (_, c) => readDepth(c)} ++ Array(0)).max,
+      (conds.map { case (_, c) => readDepth(c) } ++ Array(0)).max,
       1 // TODO reg-only design runs at 2 cycles per input currently
     ).max
     val pipe = RegInit(VecInit((0 until pipeDepth).map(_ => false.B)))
@@ -299,27 +306,30 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
     assert(numInputBits % inputWidth == 0)
 
-    val simRegsRead = new ArrayBuffer[BigInt]
-    val simVectorRegsRead = new ArrayBuffer[Array[BigInt]]
-    val simBramsRead = new ArrayBuffer[Array[BigInt]]
-    val simRegsWrite = new ArrayBuffer[BigInt]
-    val simVectorRegsWrite = new ArrayBuffer[Array[BigInt]]
-    val simBramsWrite = new ArrayBuffer[Array[BigInt]]
+    val simRegsRead = new Array[BigInt](regs.length)
+    val simVectorRegsRead = new Array[Array[BigInt]](vectorRegs.length)
+    val simBramsRead = new Array[Array[BigInt]](brams.length)
+    val simRegsWrite = new Array[BigInt](regs.length)
+    val simVectorRegsWrite = new Array[Array[BigInt]](vectorRegs.length)
+    val simBramsWrite = new Array[Array[BigInt]](brams.length)
+    val simRegsWasWritten = (0 until regs.length).map(_ => false).toArray
+    val simVectorRegsWasWritten = (0 until vectorRegs.length).map(_ => false).toArray
+    val simBramsWasWritten = (0 until brams.length).map(_ => false).toArray
 
-    for (r <- regs) {
+    for ((r, i) <- regs.zipWithIndex) {
       val nextEl = if (r.init != null) r.init else BigInt(Random.nextInt())
-      simRegsRead.append(nextEl)
-      simRegsWrite.append(nextEl)
+      simRegsRead(i) = nextEl
+      simRegsWrite(i) = nextEl
     }
-    for (v <- vectorRegs) {
+    for ((v, i) <- vectorRegs.zipWithIndex) {
       val nextEl = if (v.init != null) v.init.toArray else (0 until v.numEls).map(_ => BigInt(Random.nextInt())).toArray
-      simVectorRegsRead.append(nextEl)
-      simVectorRegsWrite.append(nextEl)
+      simVectorRegsRead(i) = nextEl
+      simVectorRegsWrite(i) = nextEl
     }
-    for (b <- brams) {
+    for ((b, i) <- brams.zipWithIndex) {
       val nextEl = (0 until b.numEls).map(_ => BigInt(Random.nextInt())).toArray
-      simBramsRead.append(nextEl)
-      simBramsWrite.append(nextEl)
+      simBramsRead(i) = nextEl
+      simBramsWrite(i) = nextEl
     }
 
     var inputWord: BigInt = null
@@ -370,11 +380,23 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       for ((cond, a) <- assignments) {
         if (genSimBool(cond)) {
           a.lhs match {
-            case r: StreamReg => simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
-            case v: VectorRegSelect => simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
-              truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
-            case b: BRAMSelect => simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
-              truncate(genSimBits(a.rhs), brams(b.arg.stateId).width)
+            case r: StreamReg => {
+              simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
+              require(!simRegsWasWritten(r.stateId), s"reg ${r.stateId} written multiple times")
+              simRegsWasWritten(r.stateId) = true
+            }
+            case v: VectorRegSelect => {
+              simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
+                truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
+              require(!simVectorRegsWasWritten(v.arg.stateId), s"vector reg ${v.arg.stateId} written multiple times")
+              simVectorRegsWasWritten(v.arg.stateId) = true
+            }
+            case b: BRAMSelect => {
+              simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
+                truncate(genSimBits(a.rhs), brams(b.arg.stateId).width)
+              require(!simBramsWasWritten(b.arg.stateId), s"BRAM ${b.arg.stateId} written multiple times")
+              simBramsWasWritten(b.arg.stateId) = true
+            }
             case _ =>
           }
         }
@@ -387,16 +409,19 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       }
       for (i <- 0 until simRegsWrite.length) {
         simRegsRead(i) = simRegsWrite(i)
+        simRegsWasWritten(i) = false
       }
       for (i <- 0 until simVectorRegsWrite.length) {
         for (j <- 0 until simVectorRegsWrite(i).length) {
           simVectorRegsRead(i)(j) = simVectorRegsWrite(i)(j)
         }
+        simVectorRegsWasWritten(i) = false
       }
       for (i <- 0 until simBramsWrite.length) {
         for (j <- 0 until simBramsWrite(i).length) {
           simBramsRead(i)(j) = simBramsWrite(i)(j)
         }
+        simBramsWasWritten(i) = false
       }
     }
     (numOutputBits, output)
