@@ -213,8 +213,10 @@ object Launcher {
           new JsonFieldExtractorSpecific(Array(Array("a", "b"), Array("a", "d"), Array("x")), 2, coreId)),
           backendName) {
           (c) => {
-            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", """{"b":{"x":5},"x":4,"a":3}""", "{}", "{}")
-            val outputs = Array("1,3,4,", "4,", "", "")
+            val longNum = String.valueOf((0 until 60).map(_ => '4').toArray) // ensure input exceeds a BRAM line
+            val inputs = Array(s"""{"a":{"b":1,"c":2,"d":3},"x":$longNum}""", """{"b":{"x":5},"x":4,"a":3}""",
+              "{}", "{}")
+            val outputs = Array(s"1,3,$longNum,", "4,", "", "")
             Builder.curBuilder.genCSim(new File("json_field_extractor_specific.c"))
             runStreamingTest(c, inputs, outputs)
           }
@@ -227,12 +229,13 @@ object Launcher {
           (c) => {
             val (numConfigBits, configBits) = JsonFieldExtractor.genConfigBits(
               Array(Array("a", "b"), Array("a", "d"), Array("x")), 100)
-            val inputs = Array("""{"a":{"b":1,"c":2,"d":3},"x":4}""", """{"b":{"x":5},"x":4,"a":3}""",
+            val longNum = String.valueOf((0 until 60).map(_ => '4').toArray) // ensure input exceeds a BRAM line
+            val inputs = Array(s"""{"a":{"b":1,"c":2,"d":3},"x":$longNum}""", """{"b":{"x":5},"x":4,"a":3}""",
               "{}", "{}").map(str => {
               val (numStrBits, strBits) = Util.charsToBits(str.toCharArray)
               (numConfigBits + numStrBits, (strBits << numConfigBits) | configBits)
             })
-            val outputs = Array("1,3,4,", "4,", "", "").map(str => Util.charsToBits(str.toCharArray))
+            val outputs = Array(s"1,3,$longNum,", "4,", "", "").map(str => Util.charsToBits(str.toCharArray))
             Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"))
             runStreamingTest(c, inputs, outputs)
           }

@@ -135,7 +135,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         useNextToken match {
           case CUR_TOK => chiselRegs(r.stateId)
           case NEXT_TOK => nextRegs(r.stateId)
-          case NEXT_TOK_COND => Mux(pipeActive, nextRegs(r.stateId), chiselRegs(r.stateId))
+          case NEXT_TOK_COND => Mux(pipeActive && (!io.outputValid || io.outputReady), nextRegs(r.stateId),
+            chiselRegs(r.stateId))
         }
       }
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
@@ -155,8 +156,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
             if (nextVectorRegs(v.arg.stateId) == null) {
               chiselVectorRegs(v.arg.stateId)(addr)
             } else {
-              Mux(pipeActive && addr === nextVectorRegs(v.arg.stateId)._1, nextVectorRegs(v.arg.stateId)._2,
-                chiselVectorRegs(v.arg.stateId)(addr))
+              Mux((pipeActive && (!io.outputValid || io.outputReady)) && addr === nextVectorRegs(v.arg.stateId)._1,
+                nextVectorRegs(v.arg.stateId)._2, chiselVectorRegs(v.arg.stateId)(addr))
             }
           }
         }
@@ -311,6 +312,13 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     for ((cb, reads) <- chiselBrams.zip(bramReads)) {
       cb.io.a_wr := false.B
       if (reads.length > 0) {
+        // If the current pipeline token is being flushed, we send its results into the RAM read ports
+        // so that RAM reads will be available for the next input (if there is one) on the next cycle. The
+        // RAM read addresses are guaranteed to be based only on registers (and not other RAM reads) due to the
+        // pipeDepth <= 1 condition, so we know that the next addresses will be immediately available as the
+        // pipeline is being flushed. RAM reads are the only case (besides the nextTokenDoesRamRead flag below)
+        // where we need to use signals based on the incoming input and incoming register values rather than the
+        // registered input and current register values.
         var addr = genBits(reads(0)._2, NEXT_TOK_COND)
         for ((cond, d) <- reads.drop(1)) {
           addr = Mux(genBool(cond, NEXT_TOK_COND), genBits(d, NEXT_TOK_COND), addr)
@@ -347,7 +355,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
 
     var readCondsPurelyReg = true
     // we don't need to use NEXT_TOK_COND for the following expressions because at the point
-    // where we use nextTokenDoesRamRead in io.inputReady it is already guaranteed that pipeActive is true
+    // where we use nextTokenDoesRamRead in io.inputReady it is already guaranteed the pipeline is being
+    // flushed of an active element
     for ((c, a) <- assignments) {
       if (readDepth(assignIdxOr0(a.lhs)) > 0 || readDepth(a.rhs) > 0) {
         if (readDepth(c) != 0) {
