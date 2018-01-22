@@ -19,14 +19,16 @@ class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends Bl
   // simulation model for BRAM
   // there's no guarantee about what happens on
   // collisions (sim access to same address with two memory ports)
-  val mem = SyncReadMem(1 << addrWidth, UInt(dataWidth.W))
+  val mem = Mem(1 << addrWidth, UInt(dataWidth.W)) // SyncReadMem
 
-  io.a_dout := mem.read(io.a_addr)
+  val regAddrA = RegNext(io.a_addr) // eliminate this if SyncReadMem
+  io.a_dout := mem.read(regAddrA)
   when (io.a_wr) {
     mem.write(io.a_addr, io.a_din)
   }
 
-  io.b_dout := mem.read(io.b_addr)
+  val regAddrB = RegNext(io.b_addr) // eliminate this if SyncReadMem
+  io.b_dout := mem.read(regAddrB)
   when (io.b_wr) {
     mem.write(io.b_addr, io.b_din)
   }
