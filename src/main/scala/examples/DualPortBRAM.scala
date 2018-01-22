@@ -19,7 +19,8 @@ class DualPortBRAM(dataWidth: Int, addrWidth: Int)  extends Module /* extends Bl
   // simulation model for BRAM
   // there's no guarantee about what happens on
   // collisions (sim access to same address with two memory ports)
-  val mem = Mem(1 << addrWidth, UInt(dataWidth.W)) // SyncReadMem
+  val mem = Mem(1 << addrWidth, UInt(dataWidth.W)) // problem with SyncReadMem is that FIRRTL sim
+  // doesn't know that there is a register between read port and output so it errors on combinational cycle
 
   val regAddrA = RegNext(io.a_addr) // eliminate this if SyncReadMem
   io.a_dout := mem.read(regAddrA)

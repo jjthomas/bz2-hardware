@@ -238,6 +238,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     ).max
     assert(pipeDepth <= 1)
 
+    // Whenever there is an active token in the pipeline that had no output or whose output is accepted,
+    // we commit its results and clear the pipeline. We may accept another input token in the same cycle
+    // if the conditions in io.inputReady are met.
     when (!pipeActive || (!io.outputValid || io.outputReady)) {
       inputRegistered := io.inputWord
       pipeActive := io.inputValid && io.inputReady
@@ -343,6 +346,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
     }
 
     var readCondsPurelyReg = true
+    // we don't need to use NEXT_TOK_COND for the following expressions because at the point
+    // where we use nextTokenDoesRamRead in io.inputReady it is already guaranteed that pipeActive is true
     for ((c, a) <- assignments) {
       if (readDepth(assignIdxOr0(a.lhs)) > 0 || readDepth(a.rhs) > 0) {
         if (readDepth(c) != 0) {
