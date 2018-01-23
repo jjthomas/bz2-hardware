@@ -463,6 +463,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val simRegsWasWritten = (0 until regs.length).map(_ => false).toArray
     val simVectorRegsWasWritten = (0 until vectorRegs.length).map(_ => false).toArray
     val simBramsWasWritten = (0 until brams.length).map(_ => false).toArray
+    val simBramsWasRead = new Array[BigInt](brams.length)
 
     for ((r, i) <- regs.zipWithIndex) {
       val nextEl = if (r.init != null) r.init else BigInt(Random.nextInt())
@@ -498,7 +499,13 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           (genSimBits(s.arg) >> s.lower) & ((BigInt(1) << numBits) - 1)
         }
         case r: StreamReg => simRegsRead(r.stateId)
-        case b: BRAMSelect => simBramsRead(b.arg.stateId)(genSimBits(b.idx).toInt)
+        case b: BRAMSelect => {
+          val addr = genSimBits(b.idx).toInt
+          require(simBramsWasRead(b.arg.stateId) == null || simBramsWasRead(b.arg.stateId) == addr,
+            s"BRAM ${b.arg.stateId} read with multiple different addresses")
+          simBramsWasRead(b.arg.stateId) = addr
+          simBramsRead(b.arg.stateId)(addr)
+        }
         case v: VectorRegSelect => simVectorRegsRead(v.arg.stateId)(genSimBits(v.idx).toInt)
         case b: StreamBool => genSimBool(b) // treat the bool as regular bits
         case _ => throw new StreamException("unexpected type in genSimBits: " + b.getClass.toString)
@@ -570,6 +577,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           simBramsRead(i)(j) = simBramsWrite(i)(j)
         }
         simBramsWasWritten(i) = false
+        simBramsWasRead(i) = null
       }
     }
     (numOutputBits, output)
