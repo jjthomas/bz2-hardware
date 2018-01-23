@@ -16,7 +16,7 @@ class ProcessingUnitIO(wordSize: Int) extends Bundle {
 
   override def cloneType(): this.type = new ProcessingUnitIO(wordSize).asInstanceOf[this.type]
 }
-abstract class ProcessingUnit(wordSize: Int) extends Module {
+abstract class ProcessingUnit(wordSize: Int, coreId: Int) extends Module {
   val io = IO(new ProcessingUnitIO(wordSize))
-  Builder.nextBuilder(wordSize, wordSize, io)
+  Builder.nextBuilder(wordSize, wordSize, io, coreId)
 }

@@ -13,12 +13,12 @@ class StreamException(message: String, cause: Throwable = null) extends Exceptio
 object Builder {
   var curBuilder: Builder = null
 
-  def nextBuilder(inputWidth: Int, outputWidth: Int, io: ProcessingUnitIO): Unit = {
-    curBuilder = new Builder(inputWidth, outputWidth, io)
+  def nextBuilder(inputWidth: Int, outputWidth: Int, io: ProcessingUnitIO, coreId: Int): Unit = {
+    curBuilder = new Builder(inputWidth, outputWidth, io, coreId)
   }
 }
 
-class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
+class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, coreId: Int) {
   require(inputWidth == outputWidth, "circuit inputWidth must equal outputWidth for now")
   val context = new ArrayBuffer[StreamWhenContext]
 
@@ -46,7 +46,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
 
   object GenBitsCase extends Enumeration {
     type GenBitsCase = Value
-    val CUR_TOK, NEXT_TOK, NEXT_TOK_COND = Value
+    val CUR_TOK, NEXT_TOK = Value
   }
   import GenBitsCase._
 
@@ -134,8 +134,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case r: StreamReg => {
         useNextToken match {
           case CUR_TOK => chiselRegs(r.stateId)
-          case NEXT_TOK => nextRegs(r.stateId)
-          case NEXT_TOK_COND => Mux(pipeActive && (!io.outputValid || io.outputReady), nextRegs(r.stateId),
+          case NEXT_TOK => Mux(pipeActive && (!io.outputValid || io.outputReady), nextRegs(r.stateId),
             chiselRegs(r.stateId))
         }
       }
@@ -145,14 +144,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         useNextToken match {
           case CUR_TOK => chiselVectorRegs(v.arg.stateId)(addr)
           case NEXT_TOK => {
-            if (nextVectorRegs(v.arg.stateId) == null) {
-              chiselVectorRegs(v.arg.stateId)(addr)
-            } else {
-              Mux(addr === nextVectorRegs(v.arg.stateId)._1, nextVectorRegs(v.arg.stateId)._2,
-                chiselVectorRegs(v.arg.stateId)(addr))
-            }
-          }
-          case NEXT_TOK_COND => {
             if (nextVectorRegs(v.arg.stateId) == null) {
               chiselVectorRegs(v.arg.stateId)(addr)
             } else {
@@ -180,6 +171,44 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       case g: GreaterThan => genBits(g.first, useNextToken) > genBits(g.second, useNextToken)
       case g: GreaterThanEqual => genBits(g.first, useNextToken) >= genBits(g.second, useNextToken)
       case _ => throw new StreamException("unexpected type in genBool: " + b.getClass.toString)
+    }
+  }
+
+  def cStringForValue(value: BigInt): String = {
+    assert(value <= Long.MaxValue)
+    value.toLong + (if (value > Integer.MAX_VALUE) "L" else "")
+  }
+
+  def genCBits(b: StreamBits): String = {
+    assert(b.getWidth <= 64)
+    b match {
+      case l: Literal => cStringForValue(l.l)
+      case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
+      case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
+      case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
+      case i: StreamInput => "input[i]"
+      case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
+      case r: StreamReg => s"reg${r.stateId}_read"
+      case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
+      case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
+      case b: StreamBool => genCBool(b) // treat the bool as regular bits
+      case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
+    }
+  }
+
+  def genCBool(b: StreamBool): String = {
+    b match {
+      case n: Negate => s"!${genCBool(n.arg)}"
+      case a: And => s"(${genCBool(a.arg1)} && ${genCBool(a.arg2)})"
+      case o: Or => s"(${genCBool(o.arg1)} || ${genCBool(o.arg2)})"
+      case c: BoolCast => genCBits(c.arg)
+      case e: Equal => s"(${genCBits(e.first)} == ${genCBits(e.second)})"
+      case n: NotEqual => s"(${genCBits(n.first)} != ${genCBits(n.second)})"
+      case l: LessThan => s"(${genCBits(l.first)} < ${genCBits(l.second)})"
+      case l: LessThanEqual => s"(${genCBits(l.first)} <= ${genCBits(l.second)})"
+      case g: GreaterThan => s"(${genCBits(g.first)} > ${genCBits(g.second)})"
+      case g: GreaterThanEqual => s"(${genCBits(g.first)} >= ${genCBits(g.second)})"
+      case _ => throw new StreamException("unexpected type in genCBool: " + b.getClass.toString)
     }
   }
 
@@ -224,6 +253,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       bramWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
     }
 
+    // used to eliminate the outermost BRAMSelect in the LHS of an assignment so that it's not included
+    // in the calculation of the read depth
     def assignIdxOr0(a: AssignableStreamData): StreamBits = {
       a match {
         case v: VectorRegSelect => v.idx
@@ -319,9 +350,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         // pipeline is being flushed. RAM reads are the only case (besides the nextTokenDoesRamRead flag below)
         // where we need to use signals based on the incoming input and incoming register values rather than the
         // registered input and current register values.
-        var addr = genBits(reads(0)._2, NEXT_TOK_COND)
+        var addr = genBits(reads(0)._2, NEXT_TOK)
         for ((cond, d) <- reads.drop(1)) {
-          addr = Mux(genBool(cond, NEXT_TOK_COND), genBits(d, NEXT_TOK_COND), addr)
+          addr = Mux(genBool(cond, NEXT_TOK), genBits(d, NEXT_TOK), addr)
         }
         cb.io.a_addr := addr
       }
@@ -353,32 +384,62 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
       }
     }
 
+    // if the returned condition evaluates to false, cond must also evaluate to false
+    def maximalNonRamReadingCond(cond: StreamBool): StreamBool = {
+      if (readDepth(cond) == 0) {
+        cond
+      } else {
+        cond match {
+          case And(arg1, arg2) => {
+            val arg1Maximal = maximalNonRamReadingCond(arg1)
+            val arg2Maximal = maximalNonRamReadingCond(arg2)
+            if (arg1Maximal != null && arg2Maximal != null) {
+              And(arg1Maximal, arg2Maximal)
+            } else if (arg1Maximal != null) {
+              arg1Maximal
+            } else if (arg2Maximal != null) {
+              arg2Maximal
+            } else {
+              null
+            }
+          }
+          case _ => null
+        }
+      }
+    }
+
+    // TODO not having the muxes in genBits/genBool for the next token could save logic
+    // here if RAM reads only occur under one condition, so that the condition is not already
+    // computed with the muxes to select the correct address for the pipelined read
     var readCondsPurelyReg = true
-    // we don't need to use NEXT_TOK_COND for the following expressions because at the point
-    // where we use nextTokenDoesRamRead in io.inputReady it is already guaranteed the pipeline is being
-    // flushed of an active element
     for ((c, a) <- assignments) {
       if (readDepth(assignIdxOr0(a.lhs)) > 0 || readDepth(a.rhs) > 0) {
-        if (readDepth(c) != 0) {
+        val maxC = maximalNonRamReadingCond(c)
+        if (maxC == null) {
           readCondsPurelyReg = false
+        } else {
+          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
-        nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(c, NEXT_TOK)
       }
     }
     for ((c, e) <- emits) {
       if (readDepth(e.data) > 0) {
-        if (readDepth(c) != 0) {
+        val maxC = maximalNonRamReadingCond(c)
+        if (maxC == null) {
           readCondsPurelyReg = false
+        } else {
+          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
-        nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(c, NEXT_TOK)
       }
     }
     for ((c, cond) <- conds) {
       if (readDepth(cond) > 0) {
-        if (readDepth(c) != 0) {
+        val maxC = maximalNonRamReadingCond(c)
+        if (maxC == null) {
           readCondsPurelyReg = false
+        } else {
+          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
-        nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(c, NEXT_TOK)
       }
     }
     if (!readCondsPurelyReg) {
@@ -550,10 +611,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         case 64 => Random.nextLong()
       }
     }
-    def cStringForValue(value: BigInt): String = {
-      assert(value <= Long.MaxValue)
-      value.toLong + (if (value > Integer.MAX_VALUE) "L" else "")
-    }
     def emitVectorInit(cw: CWriter, vectors: ArrayBuffer[Any]): Unit = {
       for ((v, i) <- vectors.zipWithIndex) {
         val (width, numEls, init, name) = v match {
@@ -587,38 +644,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO) {
         cw.writeLine(s"for (uint32_t j = 0; j < $numEls; j++) {")
         cw.writeLine(s"${name}${i}_read[j] = ${name}${i}_write[j];")
         cw.writeLine("}")
-      }
-    }
-    def genCBits(b: StreamBits): String = {
-      assert(b.getWidth <= 64)
-      b match {
-        case l: Literal => cStringForValue(l.l)
-        case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
-        case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
-        case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
-        case i: StreamInput => "input[i]"
-        case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
-        case r: StreamReg => s"reg${r.stateId}_read"
-        case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
-        case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
-        case b: StreamBool => genCBool(b) // treat the bool as regular bits
-        case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
-      }
-    }
-
-    def genCBool(b: StreamBool): String = {
-      b match {
-        case n: Negate => s"!${genCBool(n.arg)}"
-        case a: And => s"(${genCBool(a.arg1)} && ${genCBool(a.arg2)})"
-        case o: Or => s"(${genCBool(o.arg1)} || ${genCBool(o.arg2)})"
-        case c: BoolCast => genCBits(c.arg)
-        case e: Equal => s"(${genCBits(e.first)} == ${genCBits(e.second)})"
-        case n: NotEqual => s"(${genCBits(n.first)} != ${genCBits(n.second)})"
-        case l: LessThan => s"(${genCBits(l.first)} < ${genCBits(l.second)})"
-        case l: LessThanEqual => s"(${genCBits(l.first)} <= ${genCBits(l.second)})"
-        case g: GreaterThan => s"(${genCBits(g.first)} > ${genCBits(g.second)})"
-        case g: GreaterThanEqual => s"(${genCBits(g.first)} >= ${genCBits(g.second)})"
-        case _ => throw new StreamException("unexpected type in genCBool: " + b.getClass.toString)
       }
     }
 
