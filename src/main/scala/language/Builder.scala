@@ -87,6 +87,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     } else {
       var cond = context(0).cond
       for (i <- 1 until context.length) {
+        // start with the outermost item in context so that common context prefixes
+        // that appear in multiple places always have the same Chisel expression
         cond = cond && context(i).cond
       }
       cond
@@ -112,9 +114,29 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }.max
   }
 
+  def onlySelfRead(b: StreamBits, selfStateId: Int): Boolean = {
+    val nonSelfRead = b match {
+      case BRAMSelect(bram, idx) => bram.stateId != selfStateId
+      case _ => false
+    }
+    if (nonSelfRead) {
+      false
+    } else {
+      b.productIterator.map {
+        case s: StreamBits => onlySelfRead(s, selfStateId)
+        case _ => true
+      }.foldLeft(true)((b1, b2) => b1 && b2)
+    }
+  }
+
   def addRAMReads(cond: StreamBool, b: StreamBits, reads: Array[ArrayBuffer[(StreamBool, StreamBits)]]): Unit = {
     b match {
-      case s: BRAMSelect => reads(s.arg.stateId).append((cond, s.idx))
+      case s: BRAMSelect => {
+        // ensures that correct address can be fed to this BRAM on the same cycle next input is let in (i.e.
+        // a single-stage pipeline is sufficient)
+        assert(onlySelfRead(cond, s.arg.stateId))
+        reads(s.arg.stateId).append((cond, s.idx))
+      }
       case _ =>
     }
     b.productIterator.foreach {
@@ -409,14 +431,14 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
 
     // TODO not having the muxes in genBits/genBool for the next token could save logic
-    // here if RAM reads only occur under one condition, so that the condition is not already
+    // here if RAM reads only occur under one condition, in which case the condition is not already
     // computed with the muxes to select the correct address for the pipelined read
-    var readCondsPurelyReg = true
+    var hasUnconditionalRamRead = false
     for ((c, a) <- assignments) {
       if (readDepth(assignIdxOr0(a.lhs)) > 0 || readDepth(a.rhs) > 0) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
-          readCondsPurelyReg = false
+          hasUnconditionalRamRead = true
         } else {
           nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
@@ -426,7 +448,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       if (readDepth(e.data) > 0) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
-          readCondsPurelyReg = false
+          hasUnconditionalRamRead = true
         } else {
           nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
@@ -436,17 +458,19 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       if (readDepth(cond) > 0) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
-          readCondsPurelyReg = false
+          hasUnconditionalRamRead = true
         } else {
           nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
         }
       }
     }
-    if (!readCondsPurelyReg) {
+    if (hasUnconditionalRamRead) {
       nextTokenDoesRamRead = true.B
     }
     // conservative rule that allows next input only if no writes were performed to ANY BRAM on the
     // current token, or if no reads are performed to ANY BRAM by the next token otherwise
+    // TODO may be profitable to remove curTokenDoesRamWrite and/or nextTokenDoesRamRead in pipelines
+    // where they don't lead to higher throughput
     io.inputReady := !pipeActive ||
       ((!io.outputValid || io.outputReady) && (!curTokenDoesRamWrite || !nextTokenDoesRamRead))
   }
