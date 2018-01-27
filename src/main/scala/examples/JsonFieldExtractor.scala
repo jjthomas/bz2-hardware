@@ -7,38 +7,38 @@ import scala.collection.mutable.{HashMap, ArrayBuffer}
 
 object JsonFieldExtractor {
   // fields must be bottom-level (i.e. non-record types), and must all be present in every input record
-  // maxMatchId can be -1 if we want specific transitions
-  // returns (seqTrans, splitTrans, maxMatchId)
-  def genTransitions(fields: Array[Array[String]], maxFieldChars: Int): (Seq[BigInt], Seq[BigInt], Int) = {
+  // maxFieldChars can be -1 if we want specific transitions
+  // returns (seqTrans, splitTrans, maxMatchId, fieldMatchIds)
+  def genTransitions(fields: Array[Array[String]], maxFieldChars: Int): (Seq[BigInt], Seq[BigInt], Int, Seq[Int]) = {
     val fieldsQuoted = fields.map(f => f.map(id => "\"" + id.replace("\"", "\\\"") + "\""))
 
-    val sequentialBranches = new ArrayBuffer[ArrayBuffer[Char]]
-    // map from (sequential branch, idx in branch) to (char, sequential branch for that char)
-    val splitBranches = new HashMap[(Int, Int), ArrayBuffer[(Char, Int)]]
-    sequentialBranches.append(new ArrayBuffer[Char])
-    for (field <- fieldsQuoted) {
+    val sequentialBranches = new ArrayBuffer[(Int, ArrayBuffer[Char])] // (field idx, branch)
+    // map from (sequential branch, idx in branch) to (char, sequential branch for that char, field idx if terminal)
+    val splitBranches = new HashMap[(Int, Int), ArrayBuffer[(Char, Int, Int)]]
+    sequentialBranches.append((0, new ArrayBuffer[Char]))
+    for ((field, fieldIdx) <- fieldsQuoted.zipWithIndex) {
       var curBranch = 0
       var curIdx = 0
       for ((id, i) <- field.zipWithIndex) {
         for ((c, j) <- id.zipWithIndex) {
-          if (curIdx == sequentialBranches(curBranch).length) {
-            sequentialBranches(curBranch).append(c)
+          if (curIdx == sequentialBranches(curBranch)._2.length) {
+            sequentialBranches(curBranch)._2.append(c)
             curIdx += 1
           } else {
-            if (sequentialBranches(curBranch)(curIdx) == c) {
+            if (sequentialBranches(curBranch)._2(curIdx) == c) {
               curIdx += 1
             } else {
-              val split = splitBranches.getOrElseUpdate((curBranch, curIdx), new ArrayBuffer[(Char, Int)])
+              val split = splitBranches.getOrElseUpdate((curBranch, curIdx), new ArrayBuffer[(Char, Int, Int)])
               var splitIdx = 0
               while (splitIdx < split.length && c != split(splitIdx)._1) {
                 splitIdx += 1
               }
               if (splitIdx == split.length) {
                 if (i == field.length - 1 && j == id.length - 1) {
-                  split.append((c, -1))
+                  split.append((c, -1, fieldIdx))
                 } else {
-                  split.append((c, sequentialBranches.length))
-                  sequentialBranches.append(new ArrayBuffer[Char])
+                  split.append((c, sequentialBranches.length, -1))
+                  sequentialBranches.append((fieldIdx, new ArrayBuffer[Char]))
                 }
               }
               curBranch = split(splitIdx)._2
@@ -51,7 +51,7 @@ object JsonFieldExtractor {
 
     var curStateId = 0
     val sequentialStateIds = new Array[Int](sequentialBranches.length)
-    for ((branch, i) <- sequentialBranches.zipWithIndex) {
+    for (((_, branch), i) <- sequentialBranches.zipWithIndex) {
       sequentialStateIds(i) = curStateId
       curStateId += branch.length
     }
@@ -59,13 +59,16 @@ object JsonFieldExtractor {
       curStateId = maxFieldChars
     }
     val stateBits = util.log2Ceil(curStateId + 1) // need space for curStateId as well
+    assert(stateBits <= 24) // otherwise fieldMatchIds will overflow 32 bits
 
+    val fieldMatchIds = new Array[Int](fields.length)
     val sequentialTransitions = new ArrayBuffer[BigInt]
-    for ((branch, i) <- sequentialBranches.zipWithIndex) {
+    for (((fieldIdx, branch), i) <- sequentialBranches.zipWithIndex) {
       for ((c, j) <- branch.zipWithIndex) {
         var trans = BigInt(c.toInt) << stateBits
         if (j == branch.length - 1) {
           trans |= curStateId // field complete
+          fieldMatchIds(fieldIdx) = ((sequentialStateIds(i) + j) << 8) | c.toInt
         } else {
           trans |= (sequentialStateIds(i) + j + 1) // must be the state ID after the current one
         }
@@ -75,21 +78,22 @@ object JsonFieldExtractor {
     val splitTransitions = new ArrayBuffer[BigInt]
     for (((seqBranch, seqIdx), splits) <- splitBranches.iterator) {
       val stateForSplit = sequentialStateIds(seqBranch) + seqIdx
-      for ((c, nextBranch) <- splits) {
+      for ((c, nextBranch, fieldIdx) <- splits) {
         var trans = BigInt(c.toInt) << stateBits
         if (nextBranch == -1) {
           trans |= curStateId // field complete
+          fieldMatchIds(fieldIdx) = (stateForSplit << 8) | c.toInt
         } else {
           trans |= sequentialStateIds(nextBranch)
         }
         splitTransitions.append((trans << stateBits) | stateForSplit)
       }
     }
-    (sequentialTransitions, splitTransitions, curStateId)
+    (sequentialTransitions, splitTransitions, curStateId, fieldMatchIds)
   }
 
   def genConfigBits(fields: Array[Array[String]], maxFieldChars: Int): (Int, BigInt) = {
-    val (seqTrans, splitTrans, maxStateId) = genTransitions(fields, maxFieldChars)
+    val (seqTrans, splitTrans, maxStateId, _) = genTransitions(fields, maxFieldChars)
     val stateBits = util.log2Ceil(maxStateId + 1)
     val numBitsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8 * 8
     var bits = BigInt(0)
@@ -106,6 +110,12 @@ object JsonFieldExtractor {
     insertConfigTokens(seqTrans)
     insertConfigTokens(splitTrans)
     (numBits, bits)
+  }
+
+  def genFieldMatchStrs(fields: Array[Array[String]], maxFieldChars: Int): Seq[String] = {
+    val (_, _, maxStateId, fieldMatchIds) = genTransitions(fields, maxFieldChars)
+    val matchStrChars = ((util.log2Ceil(maxStateId + 1) + 8) + 8 - 1) / 8
+    fieldMatchIds.map(m => String.valueOf((0 until matchStrChars).map(i => ((m >> (i * 8)) & 255).toChar).toArray))
   }
 
   def genCircuit(seqTrans: Seq[BigInt], splitTrans: Seq[BigInt], maxMatchId: Int, maxFields: Int,
@@ -178,18 +188,28 @@ object JsonFieldExtractor {
     def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
 
     def popStateStack = {
-      swhen (matchState === maxMatchId.L) {
-        Emit(0, ','.toInt.L)
-      }
       matchState := stateStack(0)
       for (i <- 0 until stateStack.length - 1) {
         stateStack(i) := stateStack(i + 1)
       }
     }
 
+    def popStateStackWithFieldSep = {
+      swhen (matchState === maxMatchId.L) {
+        Emit(0, ','.toInt.L)
+      }
+      popStateStack
+    }
+
     def emitCurToken = {
       swhen (matchState === maxMatchId.L) {
         Emit(0, StreamInput(0))
+      }
+    }
+
+    def emitMatchStateIfMatched(nextMatchState: StreamBits, output: StreamBits) = {
+      swhen (nextMatchState === maxMatchId.L) {
+        Emit(0, (0 until output.getWidth by 8).map(i => output(Math.min(output.getWidth - 1, i + 7), i)):_*)
       }
     }
 
@@ -212,7 +232,7 @@ object JsonFieldExtractor {
       } .elsewhen (StreamInput(0) =/= '}'.toInt.L) {
         swhen (StreamInput(0) === ','.toInt.L) {
           parseState := EXP_KEY.id.L
-          popStateStack
+          popStateStackWithFieldSep
         } .otherwise {
           emitCurToken
         }
@@ -220,18 +240,23 @@ object JsonFieldExtractor {
     }
     swhen (StreamInput(0) === ','.toInt.L && parseState === EXP_COM.id.L) {
       parseState := EXP_KEY.id.L
-      popStateStack
+      popStateStackWithFieldSep
     }
     swhen (StreamInput(0) === '}'.toInt.L &&
       (parseState === EXP_KEY.id.L || parseState === EXP_COM.id.L ||
         (parseState === IN_VAL.id.L && !inStringValue.B))) {
       swhen (nestDepth === 1.L) {
+        Emit(0, '/'.toInt.L) // record separator
         parseState := EXP_VAL.id.L
       } .otherwise {
         parseState := EXP_COM.id.L
       }
       swhen (parseState === EXP_COM.id.L || parseState === IN_VAL.id.L) {
-        popStateStack
+        swhen (nestDepth === 1.L) {
+          popStateStack
+        } .otherwise {
+          popStateStackWithFieldSep
+        }
       }
       nestDepth := nestDepth - 1.L
     }
@@ -248,6 +273,7 @@ object JsonFieldExtractor {
       (matchState =/= 0.L || nestDepth === 1.L)) { // only allow match to start at top level
       val selectedSeqEl = if (seqTransRam == null) seqTransVec(matchState) else seqTransRam(matchState)
       swhen (StreamInput(0) === selectedSeqEl(stateBits + 7, stateBits)) {
+        emitMatchStateIfMatched(selectedSeqEl(stateBits - 1, 0), matchState##StreamInput(0))
         matchState := selectedSeqEl(stateBits - 1, 0)
       } .otherwise {
         var noSplit: StreamBool = true.L.B
@@ -258,6 +284,7 @@ object JsonFieldExtractor {
               StreamInput(0) === selectedSplitEl(2 * stateBits + 7, 2 * stateBits)
             noSplit = noSplit && !splitMatch
             swhen(splitMatch) {
+              emitMatchStateIfMatched(selectedSplitEl(2 * stateBits - 1, stateBits), matchState##StreamInput(0))
               matchState := selectedSplitEl(2 * stateBits - 1, stateBits)
             }
           }
@@ -284,7 +311,7 @@ object JsonFieldExtractor {
 
   class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int,
                                    coreId: Int) extends ProcessingUnit(8, coreId) {
-    val (seqTrans, splitTrans, maxMatchId) = JsonFieldExtractor.genTransitions(fields, -1)
+    val (seqTrans, splitTrans, maxMatchId, _) = JsonFieldExtractor.genTransitions(fields, -1)
     JsonFieldExtractor.genCircuit(seqTrans, splitTrans, maxMatchId, 0, maxNestDepth, coreId)
     Builder.curBuilder.compile()
   }

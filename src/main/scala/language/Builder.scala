@@ -5,6 +5,7 @@ import java.io.{PrintWriter, File}
 import chisel3._
 import examples.{DualPortBRAM, ProcessingUnitIO}
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
@@ -43,6 +44,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   var nextVectorRegs: Array[(UInt, UInt)] = null
   var nextTokenDoesRamRead = false.B
   var curTokenDoesRamWrite = false.B
+  val lastEmitRecord = Wire(Bool())
+  val pipeFinishing = pipeActive && (!io.outputValid || (io.outputReady && lastEmitRecord))
 
   object GenBitsCase extends Enumeration {
     type GenBitsCase = Value
@@ -134,7 +137,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case s: BRAMSelect => {
         // ensures that correct address can be fed to this BRAM on the same cycle next input is let in (i.e.
         // a single-stage pipeline is sufficient)
-        assert(onlySelfRead(cond, s.arg.stateId))
+        require(onlySelfRead(cond, s.arg.stateId), s"BRAM ${s.arg.stateId} read is conditioned on another BRAM read")
         reads(s.arg.stateId).append((cond, s.idx))
       }
       case _ =>
@@ -156,8 +159,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case r: StreamReg => {
         useNextToken match {
           case CUR_TOK => chiselRegs(r.stateId)
-          case NEXT_TOK => Mux(pipeActive && (!io.outputValid || io.outputReady), nextRegs(r.stateId),
-            chiselRegs(r.stateId))
+          case NEXT_TOK => Mux(pipeFinishing, nextRegs(r.stateId), chiselRegs(r.stateId))
         }
       }
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
@@ -169,8 +171,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
             if (nextVectorRegs(v.arg.stateId) == null) {
               chiselVectorRegs(v.arg.stateId)(addr)
             } else {
-              Mux((pipeActive && (!io.outputValid || io.outputReady)) && addr === nextVectorRegs(v.arg.stateId)._1,
-                nextVectorRegs(v.arg.stateId)._2, chiselVectorRegs(v.arg.stateId)(addr))
+              Mux(pipeFinishing && addr === nextVectorRegs(v.arg.stateId)._1, nextVectorRegs(v.arg.stateId)._2,
+                chiselVectorRegs(v.arg.stateId)(addr))
             }
           }
         }
@@ -286,7 +288,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     val pipeDepth = Array(
       (assignments.map { case (_, a) => Math.max(readDepth(assignIdxOr0(a.lhs)), readDepth(a.rhs)) } ++ Array(0)).max,
-      (emits.map { case (_, e) => readDepth(e.data) } ++ Array(0)).max,
+      (emits.map { case (_, e) => e.data.map(emitRecord => readDepth(emitRecord)).max } ++ Array(0)).max,
       (conds.map { case (_, c) => readDepth(c) } ++ Array(0)).max,
       0
     ).max
@@ -295,21 +297,48 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     // Whenever there is an active token in the pipeline that had no output or whose output is accepted,
     // we commit its results and clear the pipeline. We may accept another input token in the same cycle
     // if the conditions in io.inputReady are met.
-    when (!pipeActive || (!io.outputValid || io.outputReady)) {
+    when (!pipeActive || pipeFinishing) {
       inputRegistered := io.inputWord
       pipeActive := io.inputValid && io.inputReady
     }
     io.outputFinished := io.inputFinished && !pipeActive
 
     // emits
-    var curEmit = genBits(emits(0)._2.data, CUR_TOK)
-    var emitValid = genBool(emits(0)._1, CUR_TOK)
-    for ((cond, e) <- emits.drop(1)) {
-      curEmit = Mux(genBool(cond, CUR_TOK), genBits(e.data, CUR_TOK), curEmit)
-      emitValid = emitValid || genBool(cond, CUR_TOK)
+    val emitQuantityValids = new mutable.HashMap[Int, Bool]
+    for ((c, e) <- emits) {
+      require(e.data.length > 0)
+      emitQuantityValids(e.data.length) = emitQuantityValids.getOrElse(e.data.length, false.B) || genBool(c, CUR_TOK)
     }
-    emitValid = pipeActive && emitValid
-    io.outputValid := emitValid
+    val emitCounter = RegInit(0.asUInt(
+      Math.max(1, util.log2Ceil(emits.map { case (c, e) => e.data.length }.max)).W))
+    val quantityValidsArr = emitQuantityValids.toSeq
+    var curEmitLimit = (quantityValidsArr(0)._1 - 1).U
+    var emitValid = quantityValidsArr(0)._2
+    for ((quantity, valid) <- quantityValidsArr.drop(1)) {
+      curEmitLimit = Mux(valid, (quantity - 1).U, curEmitLimit)
+      emitValid = emitValid || valid
+    }
+    io.outputValid := pipeActive && emitValid
+    lastEmitRecord := emitCounter === curEmitLimit
+    when (io.outputValid && io.outputReady) {
+      when (lastEmitRecord) {
+        emitCounter := 0.U
+      } .otherwise {
+        emitCounter := emitCounter + 1.U
+      }
+    }
+
+    def genEmit(emits: Seq[StreamBits]): UInt = {
+      var emit = genBits(emits(0), CUR_TOK)
+      for ((e, i) <- emits.drop(1).zipWithIndex) {
+        emit = Mux(emitCounter === (i + 1).U, genBits(e, CUR_TOK), emit)
+      }
+      emit
+    }
+    var curEmit = genEmit(emits(0)._2.data)
+    for ((cond, e) <- emits.drop(1)) {
+      curEmit = Mux(genBool(cond, CUR_TOK), genEmit(e.data), curEmit)
+    }
     io.outputWord := curEmit
 
     // register writes
@@ -326,7 +355,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
       }
       nextRegs(i) = data
-      cr := Mux(pipeActive && (!io.outputValid || io.outputReady), data, cr)
+      cr := Mux(pipeFinishing, data, cr)
     }
 
     // vector register writes
@@ -342,7 +371,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
         }
         nextVectorRegs(vecIdx) = (idx, data)
-        cv(idx) := Mux(pipeActive && (!io.outputValid || io.outputReady), data, cv(idx))
+        cv(idx) := Mux(pipeFinishing, data, cv(idx))
       }
     }
 
@@ -357,7 +386,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
     for ((cond, e) <- emits) {
-      addRAMReads(cond, e.data, bramReads)
+      for (emitRecord <- e.data) {
+        addRAMReads(cond, emitRecord, bramReads)
+      }
     }
     for ((cond, c0) <- conds) {
       addRAMReads(cond, c0, bramReads)
@@ -398,7 +429,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
         }
         curTokenDoesRamWrite = curTokenDoesRamWrite || wr
-        cb.io.b_wr := wr && (pipeActive && (!io.outputValid || io.outputReady))
+        cb.io.b_wr := wr && pipeFinishing
         cb.io.b_addr := addr
         cb.io.b_din := data
       } else {
@@ -445,7 +476,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
     for ((c, e) <- emits) {
-      if (readDepth(e.data) > 0) {
+      if (e.data.map(emitRecord => readDepth(emitRecord) > 0).foldLeft(false)((b1, b2) => b1 || b2)) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
           hasUnconditionalRamRead = true
@@ -472,7 +503,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     // TODO may be profitable to remove curTokenDoesRamWrite and/or nextTokenDoesRamRead in pipelines
     // where they don't lead to higher throughput
     io.inputReady := !pipeActive ||
-      ((!io.outputValid || io.outputReady) && (!curTokenDoesRamWrite || !nextTokenDoesRamRead))
+      (pipeFinishing && (!curTokenDoesRamWrite || !nextTokenDoesRamRead))
   }
 
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
@@ -488,6 +519,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val simVectorRegsWasWritten = (0 until vectorRegs.length).map(_ => false).toArray
     val simBramsWasWritten = (0 until brams.length).map(_ => false).toArray
     val simBramsWasRead = new Array[BigInt](brams.length)
+    var emitOccurred = false
 
     for ((r, i) <- regs.zipWithIndex) {
       val nextEl = if (r.init != null) r.init else BigInt(Random.nextInt())
@@ -582,8 +614,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
       for ((cond, e) <- emits) {
         if (genSimBool(cond)) {
-          output = (truncate(genSimBits(e.data), outputWidth) << numOutputBits) | output
-          numOutputBits += outputWidth
+          require(!emitOccurred)
+          emitOccurred = true
+          for (emitRecord <- e.data) {
+            output = (truncate(genSimBits(emitRecord), outputWidth) << numOutputBits) | output
+            numOutputBits += outputWidth
+          }
         }
       }
       for (i <- 0 until simRegsWrite.length) {
@@ -603,6 +639,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         simBramsWasWritten(i) = false
         simBramsWasRead(i) = null
       }
+      emitOccurred = false
     }
     (numOutputBits, output)
   }
@@ -716,7 +753,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     for ((cond, e) <- emits) {
       cw.writeLine(s"if (${genCBool(cond)}) {")
-      cw.writeLine(s"output[output_count++] = ${genCBits(e.data)};")
+      for (emitRecord <- e.data) {
+        cw.writeLine(s"output[output_count++] = ${genCBits(emitRecord)};")
+      }
       cw.writeLine("}")
     }
     for (i <- 0 until regs.length) {
