@@ -23,39 +23,62 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   require(inputWidth == outputWidth, "circuit inputWidth must equal outputWidth for now")
   val context = new ArrayBuffer[StreamWhenContext]
 
-  // semantics for reg is single write per input token, arbitrary number of reads
+  // semantics for reg is single write per tick, arbitrary number of reads
   val regs = new ArrayBuffer[StreamReg]
-  // semantics for vector reg is single write per input token (single address), arbitrary number of reads from any
+  // semantics for vector reg is single write per tick (single address), arbitrary number of reads from any
   // addresses
   val vectorRegs = new ArrayBuffer[StreamVectorReg]
-  // semantics for BRAM is single read, single write per input token
+  // semantics for BRAM is single read, single write per tick
   val brams = new ArrayBuffer[StreamBRAM]
-  val assignments = new ArrayBuffer[(StreamBool, Assign)]
-  val emits = new ArrayBuffer[(StreamBool, Emit)]
-  val conds = new ArrayBuffer[(StreamBool, StreamBool)]
+
+  val fullAssignments = new ArrayBuffer[(Seq[StreamBool], Boolean, Assign)]
+  lazy val assignments = fullAssignments.map(t => (collapseContext(t._1), t._2, t._3))
+  val fullEmits = new ArrayBuffer[(Seq[StreamBool], Boolean, Emit)]
+  lazy val emits = fullEmits.map(t => (collapseContext(t._1), t._2, t._3))
+  val fullConds = new ArrayBuffer[(Seq[StreamBool], StreamBool)]
+  lazy val conds = fullConds.map(t => (collapseContext(t._1), t._2))
+
+  var inSwhile = false
+  val fullSwhileConds = new ArrayBuffer[Seq[StreamBool]]
+  lazy val swhileConds = fullSwhileConds.map(c => collapseContext(c))
 
   val chiselRegs = new ArrayBuffer[UInt]
   val chiselVectorRegs = new ArrayBuffer[Vec[UInt]]
   val chiselBrams = new ArrayBuffer[DualPortBRAM]
 
+  // active tick in the pipe (all BRAM reads are ready)
   val pipeActive = RegInit(false.B)
-  val inputRegistered = Reg(UInt(inputWidth.W))
+  val inputReg = Reg(UInt(inputWidth.W))
+  val inputRegValid = RegInit(false.B)
+  // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
   var nextVectorRegs: Array[(UInt, UInt)] = null
-  var nextTokenDoesRamRead = false.B
-  var curTokenDoesRamWrite = false.B
-  val lastEmitRecord = Wire(Bool())
-  val pipeFinishing = pipeActive && (!io.outputValid || (io.outputReady && lastEmitRecord))
+  var nextTickDoesRamRead = false.B
+  var curTickDoesRamWrite = false.B
+  val swhileDone = Wire(Bool())
+  // a single tick is finishing, where a tick is defined as a single iteration of an swhile or the closing
+  // iteration after all swhiles are complete
+  val pipeFinishing = pipeActive && (!io.outputValid || io.outputReady)
 
   object GenBitsCase extends Enumeration {
     type GenBitsCase = Value
-    val CUR_TOK, NEXT_TOK = Value
+    val CUR_TICK, NEXT_TICK = Value
   }
   import GenBitsCase._
 
+  def startSwhile(cond: StreamBool): Unit = {
+    require(!inSwhile)
+    inSwhile = true
+    fullSwhileConds.append(getContextCondition() ++ Seq(cond))
+  }
+
+  def endSwhile(): Unit = {
+    inSwhile = false
+  }
+
   def startContext(c: StreamWhenContext): Unit = {
     if (c.soloCond != null) {
-      conds.append((getContextCondition(), c.soloCond))
+      fullConds.append((getContextCondition(), c.soloCond))
     }
     context.append(c)
   }
@@ -84,26 +107,30 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
   }
 
-  def getContextCondition(): StreamBool = {
+  def collapseContext(ctx: Seq[StreamBool]): StreamBool = {
+    var cond = ctx(0)
+    for (i <- 1 until ctx.length) {
+      // start with the outermost item in context so that common context prefixes
+      // that appear in multiple places always have the same Chisel expression
+      cond = cond && ctx(i)
+    }
+    cond
+  }
+
+  def getContextCondition(): Seq[StreamBool] = {
     if (context.isEmpty) {
-      true.L.B
+      Seq(true.L.B)
     } else {
-      var cond = context(0).cond
-      for (i <- 1 until context.length) {
-        // start with the outermost item in context so that common context prefixes
-        // that appear in multiple places always have the same Chisel expression
-        cond = cond && context(i).cond
-      }
-      cond
+      context.map(c => c.cond)
     }
   }
 
   def registerAssignment(assignment: Assign): Unit = {
-    assignments.append((getContextCondition(), assignment))
+    fullAssignments.append((getContextCondition(), inSwhile, assignment))
   }
 
   def registerEmit(emit: Emit): Unit = {
-    emits.append((getContextCondition(), emit))
+    fullEmits.append((getContextCondition(), inSwhile, emit))
   }
 
   def readDepth(b: StreamBits): Int = {
@@ -154,20 +181,23 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case a: Add => genBits(a.first, useNextToken) + genBits(a.second, useNextToken)
       case s: Subtract => genBits(s.first, useNextToken) - genBits(s.second, useNextToken)
       case c: Concat => genBits(c.first, useNextToken)##genBits(c.second, useNextToken)
-      case i: StreamInput => if (useNextToken == CUR_TOK) inputRegistered else io.inputWord
+      case i: StreamInput => if (useNextToken == CUR_TICK) inputReg else
+        // unless there is no current input or we are about to flush the current input, use the current input
+        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
       case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
       case r: StreamReg => {
         useNextToken match {
-          case CUR_TOK => chiselRegs(r.stateId)
-          case NEXT_TOK => Mux(pipeFinishing, nextRegs(r.stateId), chiselRegs(r.stateId))
+          case CUR_TICK => chiselRegs(r.stateId)
+          // only use nextReg when pipeFinishing so that output is not contaminated before it is flushed
+          case NEXT_TICK => Mux(pipeFinishing, nextRegs(r.stateId), chiselRegs(r.stateId))
         }
       }
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
       case v: VectorRegSelect => {
         val addr = genBits(v.idx, useNextToken)
         useNextToken match {
-          case CUR_TOK => chiselVectorRegs(v.arg.stateId)(addr)
-          case NEXT_TOK => {
+          case CUR_TICK => chiselVectorRegs(v.arg.stateId)(addr)
+          case NEXT_TICK => {
             if (nextVectorRegs(v.arg.stateId) == null) {
               chiselVectorRegs(v.arg.stateId)(addr)
             } else {
@@ -237,23 +267,23 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def compile(): Unit = {
-    val regWrites = new Array[ArrayBuffer[(StreamBool, StreamBits)]](regs.length) // cond, data
+    val regWrites = new Array[ArrayBuffer[(StreamBool, Boolean, StreamBits)]](regs.length) // cond, is in swhile, data
     for ((r, i) <- regs.zipWithIndex) {
       if (r.init != null) {
         chiselRegs.append(RegInit(r.init.asUInt(r.width.W)))
       } else {
         chiselRegs.append(Reg(UInt(r.width.W)))
       }
-      regWrites(i) = new ArrayBuffer[(StreamBool, StreamBits)]
+      regWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits)]
     }
-    val vectorRegWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](vectorRegs.length) // cond,
-    // addr, data
+    val vectorRegWrites = new Array[
+      ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]](vectorRegs.length) // cond, is in swhile, addr, data
     for (i <- 0 until vectorRegWrites.length) {
-      vectorRegWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
+      vectorRegWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]
     }
-    for ((cond, a) <- assignments) {
+    for ((cond, isInSwhile, a) <- assignments) {
       a.lhs match {
-        case v: VectorRegSelect => vectorRegWrites(v.arg.stateId).append((cond, v.idx, a.rhs))
+        case v: VectorRegSelect => vectorRegWrites(v.arg.stateId).append((cond, isInSwhile, v.idx, a.rhs))
         case _ =>
       }
     }
@@ -270,11 +300,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
     val bramReads = new Array[ArrayBuffer[(StreamBool, StreamBits)]](brams.length) // cond, addr
-    val bramWrites = new Array[ArrayBuffer[(StreamBool, StreamBits, StreamBits)]](brams.length) // cond, addr, data
+    val bramWrites = new Array[ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]](brams.length) // cond,
+    // is in swhile, addr, data
     for ((b, i) <- brams.zipWithIndex) {
       chiselBrams.append(Module(new DualPortBRAM(b.width, util.log2Ceil(b.numEls))))
       bramReads(i) = new ArrayBuffer[(StreamBool, StreamBits)]
-      bramWrites(i) = new ArrayBuffer[(StreamBool, StreamBits, StreamBits)]
+      bramWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]
     }
 
     // used to eliminate the outermost BRAMSelect in the LHS of an assignment so that it's not included
@@ -287,72 +318,64 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
     val pipeDepth = Array(
-      (assignments.map { case (_, a) => Math.max(readDepth(assignIdxOr0(a.lhs)), readDepth(a.rhs)) } ++ Array(0)).max,
-      (emits.map { case (_, e) => e.data.map(emitRecord => readDepth(emitRecord)).max } ++ Array(0)).max,
+      (assignments.map { case (_, _, a) =>
+        Math.max(readDepth(assignIdxOr0(a.lhs)), readDepth(a.rhs)) } ++ Array(0)).max,
+      (emits.map { case (_, _, e) => readDepth(e.data) } ++ Array(0)).max,
       (conds.map { case (_, c) => readDepth(c) } ++ Array(0)).max,
       0
     ).max
     assert(pipeDepth <= 1)
 
-    // Whenever there is an active token in the pipeline that had no output or whose output is accepted,
-    // we commit its results and clear the pipeline. We may accept another input token in the same cycle
-    // if the conditions in io.inputReady are met.
-    when (!pipeActive || pipeFinishing) {
-      inputRegistered := io.inputWord
-      pipeActive := io.inputValid && io.inputReady
+    var swhileDoneTmp = true.B
+    for (cond <- swhileConds) {
+      swhileDoneTmp = swhileDoneTmp && !genBool(cond, CUR_TICK)
+    }
+    swhileDone := swhileDoneTmp
+    val nextTickMemsReady = Wire(Bool())
+    io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
+    when (!pipeActive) {
+      when (!inputRegValid) { // no token now, so try to accept new input
+        inputReg := io.inputWord
+        inputRegValid := io.inputValid && io.inputReady
+        pipeActive := io.inputValid && io.inputReady
+      } .otherwise { // we have a max one cycle delay for BRAM writes to commit at the end of the previous tick, so must
+        // be safe to reactivate pipe
+        pipeActive := true.B
+      }
+    } .elsewhen (pipeFinishing) { // active tick in the pipeline that had no output or whose output is accepted
+      when (swhileDone) { // current token done, so try to accept new input
+        inputReg := io.inputWord
+        inputRegValid := io.inputValid && io.inputReady
+        pipeActive := io.inputValid && io.inputReady
+      } .otherwise { // may be possible to start another tick now
+        pipeActive := nextTickMemsReady
+      }
     }
     io.outputFinished := io.inputFinished && !pipeActive
 
     // emits
-    val emitQuantityValids = new mutable.HashMap[Int, Bool]
-    for ((c, e) <- emits) {
-      require(e.data.length > 0)
-      emitQuantityValids(e.data.length) = emitQuantityValids.getOrElse(e.data.length, false.B) || genBool(c, CUR_TOK)
-    }
-    val emitCounter = RegInit(0.asUInt(
-      Math.max(1, util.log2Ceil(emits.map { case (c, e) => e.data.length }.max)).W))
-    val quantityValidsArr = emitQuantityValids.toSeq
-    var curEmitLimit = (quantityValidsArr(0)._1 - 1).U
-    var emitValid = quantityValidsArr(0)._2
-    for ((quantity, valid) <- quantityValidsArr.drop(1)) {
-      curEmitLimit = Mux(valid, (quantity - 1).U, curEmitLimit)
+    var curEmit = genBits(emits(0)._3.data, CUR_TICK)
+    var emitValid = genBool(emits(0)._1, CUR_TICK) && (if (emits(0)._2) true.B else swhileDone)
+    for ((cond, isInSwhile, e) <- emits.drop(1)) {
+      val valid = genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone)
+      curEmit = Mux(valid, genBits(e.data, CUR_TICK), curEmit)
       emitValid = emitValid || valid
     }
     io.outputValid := pipeActive && emitValid
-    lastEmitRecord := emitCounter === curEmitLimit
-    when (io.outputValid && io.outputReady) {
-      when (lastEmitRecord) {
-        emitCounter := 0.U
-      } .otherwise {
-        emitCounter := emitCounter + 1.U
-      }
-    }
-
-    def genEmit(emits: Seq[StreamBits]): UInt = {
-      var emit = genBits(emits(0), CUR_TOK)
-      for ((e, i) <- emits.drop(1).zipWithIndex) {
-        emit = Mux(emitCounter === (i + 1).U, genBits(e, CUR_TOK), emit)
-      }
-      emit
-    }
-    var curEmit = genEmit(emits(0)._2.data)
-    for ((cond, e) <- emits.drop(1)) {
-      curEmit = Mux(genBool(cond, CUR_TOK), genEmit(e.data), curEmit)
-    }
     io.outputWord := curEmit
 
     // register writes
     nextRegs = new Array[UInt](chiselRegs.length)
-    for ((cond, a) <- assignments) {
+    for ((cond, isInSwhile, a) <- assignments) {
       a.lhs match {
-        case r: StreamReg => regWrites(r.stateId).append((cond, a.rhs))
+        case r: StreamReg => regWrites(r.stateId).append((cond, isInSwhile, a.rhs))
         case _ =>
       }
     }
     for (((cr, writes), i) <- chiselRegs.zip(regWrites).zipWithIndex) {
       var data = cr
-      for ((cond, d) <- writes) {
-        data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
+      for ((cond, isInSwhile, d) <- writes) {
+        data = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(d, CUR_TICK), data)
       }
       nextRegs(i) = data
       cr := Mux(pipeFinishing, data, cr)
@@ -362,13 +385,13 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     nextVectorRegs = new Array[(UInt, UInt)](chiselVectorRegs.length)
     for (((cv, writes), vecIdx) <- chiselVectorRegs.zip(vectorRegWrites).zipWithIndex) {
       if (writes.length > 0) { // don't write anything if no user-defined writes so that ROM will be synthesized
-        var idx = genBits(writes(0)._2, CUR_TOK)
-        for ((cond, i, _) <- writes.drop(1)) {
-          idx = Mux(genBool(cond, CUR_TOK), genBits(i, CUR_TOK), idx)
+        var idx = genBits(writes(0)._3, CUR_TICK)
+        for ((cond, isInSwhile, i, _) <- writes.drop(1)) {
+          idx = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(i, CUR_TICK), idx)
         }
         var data = cv(idx)
-        for ((cond, _, d) <- writes) {
-          data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
+        for ((cond, isInSwhile, _, d) <- writes) {
+          data = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(d, CUR_TICK), data)
         }
         nextVectorRegs(vecIdx) = (idx, data)
         cv(idx) := Mux(pipeFinishing, data, cv(idx))
@@ -376,7 +399,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
 
     // BRAM reads
-    for ((cond, a) <- assignments) {
+    for ((cond, _, a) <- assignments) {
       addRAMReads(cond, a.rhs, bramReads)
       a.lhs match {
         case b: BRAMSelect => addRAMReads(cond, b.idx, bramReads)
@@ -385,10 +408,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         case _ =>
       }
     }
-    for ((cond, e) <- emits) {
-      for (emitRecord <- e.data) {
-        addRAMReads(cond, emitRecord, bramReads)
-      }
+    for ((cond, _, e) <- emits) {
+      addRAMReads(cond, e.data, bramReads)
     }
     for ((cond, c0) <- conds) {
       addRAMReads(cond, c0, bramReads)
@@ -396,39 +417,40 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     for ((cb, reads) <- chiselBrams.zip(bramReads)) {
       cb.io.a_wr := false.B
       if (reads.length > 0) {
-        // If the current pipeline token is being flushed, we send its results into the RAM read ports
+        // If the current tick is being flushed, we send its results into the RAM read ports
         // so that RAM reads will be available for the next input (if there is one) on the next cycle. The
         // RAM read addresses are guaranteed to be based only on registers (and not other RAM reads) due to the
         // pipeDepth <= 1 condition, so we know that the next addresses will be immediately available as the
-        // pipeline is being flushed. RAM reads are the only case (besides the nextTokenDoesRamRead flag below)
+        // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamRead flag below)
         // where we need to use signals based on the incoming input and incoming register values rather than the
         // registered input and current register values.
-        var addr = genBits(reads(0)._2, NEXT_TOK)
+        var addr = genBits(reads(0)._2, NEXT_TICK)
         for ((cond, d) <- reads.drop(1)) {
-          addr = Mux(genBool(cond, NEXT_TOK), genBits(d, NEXT_TOK), addr)
+          addr = Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
         }
         cb.io.a_addr := addr
       }
     }
 
     // BRAM writes
-    for ((cond, a) <- assignments) {
+    for ((cond, isInSwhile, a) <- assignments) {
       a.lhs match {
-        case b: BRAMSelect => bramWrites(b.arg.stateId).append((cond, b.idx, a.rhs))
+        case b: BRAMSelect => bramWrites(b.arg.stateId).append((cond, isInSwhile, b.idx, a.rhs))
         case _ =>
       }
     }
     for ((cb, writes) <- chiselBrams.zip(bramWrites)) {
       if (writes.length > 0) {
-        var wr = genBool(writes(0)._1, CUR_TOK)
-        var addr = genBits(writes(0)._2, CUR_TOK)
-        var data = genBits(writes(0)._3, CUR_TOK)
-        for ((cond, a, d) <- writes.drop(1)) {
-          wr = wr || genBool(cond, CUR_TOK)
-          addr = Mux(genBool(cond, CUR_TOK), genBits(a, CUR_TOK), addr)
-          data = Mux(genBool(cond, CUR_TOK), genBits(d, CUR_TOK), data)
+        var wr = genBool(writes(0)._1, CUR_TICK) && (if (writes(0)._2) true.B else swhileDone)
+        var addr = genBits(writes(0)._3, CUR_TICK)
+        var data = genBits(writes(0)._4, CUR_TICK)
+        for ((cond, isInSwhile, a, d) <- writes.drop(1)) {
+          val valid = genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone)
+          wr = wr || valid
+          addr = Mux(valid, genBits(a, CUR_TICK), addr)
+          data = Mux(valid, genBits(d, CUR_TICK), data)
         }
-        curTokenDoesRamWrite = curTokenDoesRamWrite || wr
+        curTickDoesRamWrite = curTickDoesRamWrite || wr
         cb.io.b_wr := wr && pipeFinishing
         cb.io.b_addr := addr
         cb.io.b_din := data
@@ -461,27 +483,27 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
 
-    // TODO not having the muxes in genBits/genBool for the next token could save logic
+    // TODO not having the muxes in genBits/genBool for the NEXT_TICK could save logic
     // here if RAM reads only occur under one condition, in which case the condition is not already
     // computed with the muxes to select the correct address for the pipelined read
     var hasUnconditionalRamRead = false
-    for ((c, a) <- assignments) {
+    for ((c, _, a) <- assignments) {
       if (readDepth(assignIdxOr0(a.lhs)) > 0 || readDepth(a.rhs) > 0) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
           hasUnconditionalRamRead = true
         } else {
-          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
+          nextTickDoesRamRead = nextTickDoesRamRead || genBool(maxC, NEXT_TICK)
         }
       }
     }
-    for ((c, e) <- emits) {
-      if (e.data.map(emitRecord => readDepth(emitRecord) > 0).foldLeft(false)((b1, b2) => b1 || b2)) {
+    for ((c, _, e) <- emits) {
+      if (readDepth(e.data) > 0) {
         val maxC = maximalNonRamReadingCond(c)
         if (maxC == null) {
           hasUnconditionalRamRead = true
         } else {
-          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
+          nextTickDoesRamRead = nextTickDoesRamRead || genBool(maxC, NEXT_TICK)
         }
       }
     }
@@ -491,19 +513,18 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         if (maxC == null) {
           hasUnconditionalRamRead = true
         } else {
-          nextTokenDoesRamRead = nextTokenDoesRamRead || genBool(maxC, NEXT_TOK)
+          nextTickDoesRamRead = nextTickDoesRamRead || genBool(maxC, NEXT_TICK)
         }
       }
     }
     if (hasUnconditionalRamRead) {
-      nextTokenDoesRamRead = true.B
+      nextTickDoesRamRead = true.B
     }
-    // conservative rule that allows next input only if no writes were performed to ANY BRAM on the
-    // current token, or if no reads are performed to ANY BRAM by the next token otherwise
-    // TODO may be profitable to remove curTokenDoesRamWrite and/or nextTokenDoesRamRead in pipelines
+    // conservative rule that allows next tick only if no writes were performed to ANY BRAM on the
+    // current tick, or if no reads are performed to ANY BRAM by the next tick otherwise
+    // TODO may be profitable to remove curTickDoesRamWrite and/or nextTickDoesRamRead in pipelines
     // where they don't lead to higher throughput
-    io.inputReady := !pipeActive ||
-      (pipeFinishing && (!curTokenDoesRamWrite || !nextTokenDoesRamRead))
+    nextTickMemsReady := !curTickDoesRamWrite || !nextTickDoesRamRead
   }
 
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
@@ -584,62 +605,76 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
 
+    // only evaluate as much as we need so that we don't trigger multiple reads from a single BRAM if it doesn't
+    // actually need to happen
+    def evalFullCond(cond: Seq[StreamBool]): Boolean = {
+      for (c <- cond) {
+        if (!genSimBool(c)) {
+          return false
+        }
+      }
+      return true
+    }
+
     var numOutputBits = 0
     var output = BigInt(0)
     for (i <- 0 until numInputBits by inputWidth) {
       inputWord = (inputBits >> i) & ((BigInt(1) << inputWidth) - 1)
-      for ((cond, a) <- assignments) {
-        if (genSimBool(cond)) {
-          a.lhs match {
-            case r: StreamReg => {
-              simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
-              require(!simRegsWasWritten(r.stateId), s"reg ${r.stateId} written multiple times")
-              simRegsWasWritten(r.stateId) = true
+      var simSwhileDone = false
+      do {
+        simSwhileDone = fullSwhileConds.map(c => !evalFullCond(c)).foldLeft(true)((b1, b2) => b1 && b2)
+        for ((cond, isInSwhile, a) <- fullAssignments) {
+          if ((simSwhileDone || isInSwhile) && evalFullCond(cond)) {
+            a.lhs match {
+              case r: StreamReg => {
+                simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
+                require(!simRegsWasWritten(r.stateId), s"reg ${r.stateId} written multiple times")
+                simRegsWasWritten(r.stateId) = true
+              }
+              case v: VectorRegSelect => {
+                simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
+                  truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
+                require(!simVectorRegsWasWritten(v.arg.stateId), s"vector reg ${v.arg.stateId} written multiple times")
+                simVectorRegsWasWritten(v.arg.stateId) = true
+              }
+              case b: BRAMSelect => {
+                simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
+                  truncate(genSimBits(a.rhs), brams(b.arg.stateId).width)
+                require(!simBramsWasWritten(b.arg.stateId), s"BRAM ${b.arg.stateId} written multiple times")
+                simBramsWasWritten(b.arg.stateId) = true
+              }
+              case _ =>
             }
-            case v: VectorRegSelect => {
-              simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
-                truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
-              require(!simVectorRegsWasWritten(v.arg.stateId), s"vector reg ${v.arg.stateId} written multiple times")
-              simVectorRegsWasWritten(v.arg.stateId) = true
-            }
-            case b: BRAMSelect => {
-              simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
-                truncate(genSimBits(a.rhs), brams(b.arg.stateId).width)
-              require(!simBramsWasWritten(b.arg.stateId), s"BRAM ${b.arg.stateId} written multiple times")
-              simBramsWasWritten(b.arg.stateId) = true
-            }
-            case _ =>
           }
         }
-      }
-      for ((cond, e) <- emits) {
-        if (genSimBool(cond)) {
-          require(!emitOccurred)
-          emitOccurred = true
-          for (emitRecord <- e.data) {
-            output = (truncate(genSimBits(emitRecord), outputWidth) << numOutputBits) | output
+        for ((cond, isInSwhile, e) <- fullEmits) {
+          if ((simSwhileDone || isInSwhile) && evalFullCond(cond)) {
+            require(!emitOccurred)
+            emitOccurred = true
+            output = (truncate(genSimBits(e.data), outputWidth) << numOutputBits) | output
             numOutputBits += outputWidth
           }
         }
-      }
-      for (i <- 0 until simRegsWrite.length) {
-        simRegsRead(i) = simRegsWrite(i)
-        simRegsWasWritten(i) = false
-      }
-      for (i <- 0 until simVectorRegsWrite.length) {
-        for (j <- 0 until simVectorRegsWrite(i).length) {
-          simVectorRegsRead(i)(j) = simVectorRegsWrite(i)(j)
+
+        for (i <- 0 until simRegsWrite.length) {
+          simRegsRead(i) = simRegsWrite(i)
+          simRegsWasWritten(i) = false
         }
-        simVectorRegsWasWritten(i) = false
-      }
-      for (i <- 0 until simBramsWrite.length) {
-        for (j <- 0 until simBramsWrite(i).length) {
-          simBramsRead(i)(j) = simBramsWrite(i)(j)
+        for (i <- 0 until simVectorRegsWrite.length) {
+          for (j <- 0 until simVectorRegsWrite(i).length) {
+            simVectorRegsRead(i)(j) = simVectorRegsWrite(i)(j)
+          }
+          simVectorRegsWasWritten(i) = false
         }
-        simBramsWasWritten(i) = false
-        simBramsWasRead(i) = null
-      }
-      emitOccurred = false
+        for (i <- 0 until simBramsWrite.length) {
+          for (j <- 0 until simBramsWrite(i).length) {
+            simBramsRead(i)(j) = simBramsWrite(i)(j)
+          }
+          simBramsWasWritten(i) = false
+          simBramsWasRead(i) = null
+        }
+        emitOccurred = false
+      } while (!simSwhileDone)
     }
     (numOutputBits, output)
   }
@@ -648,7 +683,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     var indentLevel = 0
     val pw = new PrintWriter(outputFile)
     def writeLine(line: String): Unit = {
-      if (line.endsWith("}") || line.endsWith("};")) {
+      if (line.startsWith("}") || line.startsWith("};")) {
         indentLevel = if (indentLevel == 0) 0 else indentLevel - 1
       }
       for (i <- 0 until indentLevel) {
@@ -738,8 +773,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     emitVectorInit(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
     emitVectorInit(cw, brams.asInstanceOf[ArrayBuffer[Any]])
     cw.writeLine("for (uint32_t i = 0; i < input_len; i++) {")
-    for ((cond, a) <- assignments) {
-      cw.writeLine(s"if (${genCBool(cond)}) {")
+    cw.writeLine("uint8_t swhile_done = 0;")
+    cw.writeLine("do {")
+    cw.writeLine(
+      s"swhile_done = ${genCBool(swhileConds.foldLeft(true.L.B.asInstanceOf[StreamBool])((b1, b2) => b1 && !b2))};")
+    for ((cond, isInSwhile, a) <- assignments) {
+      cw.writeLine(s"if (${if (isInSwhile) "" else "swhile_done && "}${genCBool(cond)}) {")
       a.lhs match {
         case r: StreamReg => cw.writeLine(s"reg${r.stateId}_write = ${genCBits(a.rhs)};")
         case v: VectorRegSelect =>
@@ -751,11 +790,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
       cw.writeLine("}")
     }
-    for ((cond, e) <- emits) {
-      cw.writeLine(s"if (${genCBool(cond)}) {")
-      for (emitRecord <- e.data) {
-        cw.writeLine(s"output[output_count++] = ${genCBits(emitRecord)};")
-      }
+    for ((cond, isInSwhile, e) <- emits) {
+      cw.writeLine(s"if (${if (isInSwhile) "" else "swhile_done && "}${genCBool(cond)}) {")
+      cw.writeLine(s"output[output_count++] = ${genCBits(e.data)};")
       cw.writeLine("}")
     }
     for (i <- 0 until regs.length) {
@@ -763,6 +800,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     emitVectorWriteToRead(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
     emitVectorWriteToRead(cw, brams.asInstanceOf[ArrayBuffer[Any]])
+    cw.writeLine("} while (!swhile_done);")
     cw.writeLine("}")
     cw.writeLine("return output_count;")
     cw.writeLine("}")

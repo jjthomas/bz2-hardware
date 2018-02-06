@@ -143,6 +143,8 @@ object JsonFieldExtractor {
         if (splitTrans.length == 0) null else StreamVectorReg(2 * stateBits + 8, splitTrans.length, splitTrans)
       }
     val stateStack = (0 until maxNestDepth).map(i => StreamReg(stateBits, null))
+    val matchStrChars = ((stateBits + 8) + 8 - 1) / 8
+    val matchStrEmitCounter = StreamReg(util.log2Ceil(matchStrChars), 0)
 
     if (seqTrans == null) {
       val numWordsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8
@@ -209,7 +211,16 @@ object JsonFieldExtractor {
 
     def emitMatchStateIfMatched(nextMatchState: StreamBits, output: StreamBits) = {
       swhen (nextMatchState === maxMatchId.L) {
-        Emit(0, (0 until output.getWidth by 8).map(i => output(Math.min(output.getWidth - 1, i + 7), i)):_*)
+        swhile (matchStrEmitCounter < (matchStrChars - 1).L) {
+          for (i <- 0 until (matchStrChars - 1)) {
+            swhen (matchStrEmitCounter === i.L) {
+              Emit(0, output((i + 1) * 8 - 1, i * 8))
+            }
+          }
+          matchStrEmitCounter := matchStrEmitCounter + 1.L
+        }
+        Emit(0, output(output.getWidth - 1, (matchStrChars - 1) * 8))
+        matchStrEmitCounter := 0.L
       }
     }
 

@@ -6,6 +6,14 @@ object swhen {
   }
 }
 
+object swhile {
+  def apply(cond: StreamBool)(block: => Unit): Unit = {
+    Builder.curBuilder.startSwhile(cond)
+    new StreamWhenContext(cond, null, cond, block)
+    Builder.curBuilder.endSwhile()
+  }
+}
+
 class StreamWhenContext(val cond: StreamBool, prevCond: StreamBool, val soloCond: StreamBool,
                         block: => Unit) {
   def elsewhen(elseCond: StreamBool)(block: => Unit): StreamWhenContext = {
