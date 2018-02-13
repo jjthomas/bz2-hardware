@@ -46,8 +46,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val chiselVectorRegs = new ArrayBuffer[Vec[UInt]]
   val chiselBrams = new ArrayBuffer[DualPortBRAM]
 
-  // active tick in the pipe
-  val pipeActive = RegInit(false.B)
   val inputReg = Reg(UInt(inputWidth.W))
   val inputRegValid = RegInit(false.B)
   // next reg and vector regs values that are about to be written for the current active tick
@@ -57,10 +55,10 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   var curTickDoesRamWriteToDepth1 = false.B
   val swhileDone = Wire(Bool())
   // all BRAM reads for active tick are ready
-  val pipeReadsReady = Wire(Bool())
+  val pipeFinalState = Wire(Bool())
   // a single tick is finishing, where a tick is defined as a single iteration of an swhile or the closing
   // iteration after all swhiles are complete
-  val pipeFinishing = pipeActive && pipeReadsReady && (!io.outputValid || io.outputReady)
+  val pipeFinishing = pipeFinalState && (!io.outputValid || io.outputReady)
 
   object GenBitsCase extends Enumeration {
     type GenBitsCase = Value
@@ -381,30 +379,30 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     swhileDone := swhileDoneTmp
 
     val nextTickMemsReady = Wire(Bool())
+    val pipeState = RegInit(0.asUInt(util.log2Ceil(maxReadDepth + 1).W))
+    val pipeActive = pipeState =/= 0.U
     io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
-    val pipeCycleCounter = RegInit(0.asUInt(Math.max(util.log2Ceil(maxReadDepth), 1).W))
-    pipeReadsReady := pipeCycleCounter === (maxReadDepth - 1).U
-    when (pipeActive && pipeCycleCounter < (maxReadDepth - 1).U) {
-      pipeCycleCounter := pipeCycleCounter + 1.U
+    pipeFinalState := pipeState === maxReadDepth.U
+    when (pipeActive && !pipeFinalState) {
+      pipeState := pipeState + 1.U
     }
     when (!pipeActive) {
       when (!inputRegValid) { // no token now, so try to accept new input
         inputReg := io.inputWord
         inputRegValid := io.inputValid && io.inputReady
-        pipeActive := io.inputValid && io.inputReady
+        pipeState := Mux(io.inputValid && io.inputReady, 1.U, 0.U)
       } .otherwise { // we have a max one cycle delay for BRAM writes to commit at the end of the previous tick, so must
         // be safe to reactivate pipe
-        pipeActive := true.B
+        pipeState := 1.U
       }
     } .elsewhen (pipeFinishing) { // active tick in the pipeline that had no output or whose output is accepted
       when (swhileDone) { // current token done, so try to accept new input
         inputReg := io.inputWord
         inputRegValid := io.inputValid && io.inputReady
-        pipeActive := io.inputValid && io.inputReady
+        pipeState := Mux(io.inputValid && io.inputReady, 1.U, 0.U)
       } .otherwise { // may be possible to start another tick now
-        pipeActive := nextTickMemsReady
+        pipeState := Mux(nextTickMemsReady, 1.U, 0.U)
       }
-      pipeCycleCounter := 0.U
     }
     io.outputFinished := io.inputFinished && !pipeActive
 
@@ -416,7 +414,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       curEmit = Mux(valid, genBits(e.data, CUR_TICK), curEmit)
       emitValid = emitValid || valid
     }
-    io.outputValid := pipeActive && pipeReadsReady && emitValid
+    io.outputValid := pipeFinalState && emitValid
     io.outputWord := curEmit
 
     // register writes
