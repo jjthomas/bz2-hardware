@@ -51,8 +51,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
   var nextVectorRegs: Array[(UInt, UInt)] = null
-  var nextTickDoesRamReadAtDepth1 = false.B
-  var curTickDoesRamWriteToDepth1 = false.B
   val swhileDone = Wire(Bool())
   // all BRAM reads for active tick are ready
   val pipeFinalState = Wire(Bool())
@@ -383,6 +381,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val pipeActive = pipeState =/= 0.U
     io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
     pipeFinalState := pipeState === maxReadDepth.U
+    // TODO if this tick doesn't do any depth 1 RAM reads and we have a pipeline with depth > 1,
+    // it may be possible to run the tick in fewer cycles by considering the depth 2 reads to be done
+    // immediately, since there are no depth 1 reads they need to wait for
     when (pipeActive && !pipeFinalState) {
       pipeState := pipeState + 1.U
     }
@@ -459,7 +460,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         // so that RAM reads will be available for the next input (if there is one) on the next cycle. The
         // RAM read addresses are guaranteed to be based only on registers (and not other RAM reads) due to the
         // pipeDepth <= 1 condition, so we know that the next addresses will be immediately available as the
-        // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamReadAtDepth1 flag below)
+        // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamReadAtDepth1 flags below)
         // where we need to use signals based on the incoming input and incoming register values rather than the
         // registered input and current register values.
         var addr = genBits(reads(0)._2, NEXT_TICK)
@@ -488,9 +489,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           addr = Mux(valid, genBits(a, CUR_TICK), addr)
           data = Mux(valid, genBits(d, CUR_TICK), data)
         }
-        if (readDepths(i) == 1) {
-          curTickDoesRamWriteToDepth1 = curTickDoesRamWriteToDepth1 || wr
-        }
         cb.io.b_wr := wr && pipeFinishing
         cb.io.b_addr := addr
         cb.io.b_din := data
@@ -505,81 +503,46 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         cond
       } else {
         cond match {
-          case And(arg1, arg2) => {
-            val arg1Maximal = maximalNonRamReadingCond(arg1)
-            val arg2Maximal = maximalNonRamReadingCond(arg2)
-            if (arg1Maximal != null && arg2Maximal != null) {
-              And(arg1Maximal, arg2Maximal)
-            } else if (arg1Maximal != null) {
-              arg1Maximal
-            } else if (arg2Maximal != null) {
-              arg2Maximal
-            } else {
-              null
-            }
-          }
-          case _ => null
+          case And(arg1, arg2) => And(maximalNonRamReadingCond(arg1), maximalNonRamReadingCond(arg2))
+          case _ => true.L.B
         }
       }
     }
 
-    def hasDepth1Reads(b: StreamBits): Boolean = {
-      for (read <- collectAllReads(b, new mutable.HashSet[Int])) {
-        if (readDepths(read) == 1) {
-          return true
-        }
-      }
-      return false
+    def getDepth1Reads(b: StreamBits): mutable.Set[Int] = {
+      collectAllReads(b, new mutable.HashSet[Int]).filter(r => readDepths(r) == 1)
     }
 
+    val nextTickDoesRamReadAtDepth1 = (0 until brams.length).map(_ => false.B).toArray
     // TODO not having the muxes in genBits/genBool for the NEXT_TICK could save logic
     // here if RAM reads only occur under one condition, in which case the condition is not already
     // computed with the muxes to select the correct address for the pipelined read
-    var hasUnconditionalRamRead = false
     for ((c, _, a) <- assignments) {
-      if (hasDepth1Reads(assignIdxOr0(a.lhs)) || hasDepth1Reads(a.rhs)) {
-        val maxC = maximalNonRamReadingCond(c)
-        if (maxC == null) {
-          hasUnconditionalRamRead = true
-        } else {
-          nextTickDoesRamReadAtDepth1 = nextTickDoesRamReadAtDepth1 || genBool(maxC, NEXT_TICK)
-        }
+      val maxC = maximalNonRamReadingCond(c)
+      for (r <- getDepth1Reads(assignIdxOr0(a.lhs)).union(getDepth1Reads(a.rhs))) {
+        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
       }
     }
     for ((c, _, e) <- emits) {
-      if (hasDepth1Reads(e.data)) {
-        val maxC = maximalNonRamReadingCond(c)
-        if (maxC == null) {
-          hasUnconditionalRamRead = true
-        } else {
-          nextTickDoesRamReadAtDepth1 = nextTickDoesRamReadAtDepth1 || genBool(maxC, NEXT_TICK)
-        }
+      val maxC = maximalNonRamReadingCond(c)
+      for (r <- getDepth1Reads(e.data)) {
+        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
       }
     }
     for ((c, cond) <- conds) {
-      if (hasDepth1Reads(cond)) {
-        val maxC = maximalNonRamReadingCond(c)
-        if (maxC == null) {
-          hasUnconditionalRamRead = true
-        } else {
-          nextTickDoesRamReadAtDepth1 = nextTickDoesRamReadAtDepth1 || genBool(maxC, NEXT_TICK)
-        }
+      val maxC = maximalNonRamReadingCond(c)
+      for (r <- getDepth1Reads(cond)) {
+        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
       }
     }
-    if (hasUnconditionalRamRead) {
-      nextTickDoesRamReadAtDepth1 = true.B
+    // rule that checks whether there is a write-read conflict on any depth 1 RAM
+    // TODO may be profitable to remove nextTickDoesRamReadAtDepth1 entries in pipelines where they don't lead to
+    // higher throughput
+    var nextTickMemsReadTmp = true.B
+    for ((cb, nextRead) <- chiselBrams.zip(nextTickDoesRamReadAtDepth1)) {
+      nextTickMemsReadTmp = nextTickMemsReadTmp && (!cb.io.b_wr || !nextRead)
     }
-    // conservative rule that allows next tick only if no writes were performed to ANY depth 1 BRAM on the
-    // current tick, or if no reads are performed to ANY depth 1 BRAM by the next tick otherwise
-    // TODO we may want a less conservative rule that checks whether there is a write-read conflict on
-    // a specific depth 1 RAM instead
-    // TODO may be profitable to remove curTickDoesRamWriteToDepth1 and/or nextTickDoesRamReadAtDepth1 in pipelines
-    // where they don't lead to higher throughput
-    // TODO if the next tick doesn't do a depth 1 RAM read and we have a pipeline with depth > 1,
-    // it may be possible to run the next tick in fewer cycles by considering the depth 2 reads to be done
-    // immediately (assuming the current tick hasn't written to depth 2 RAMs), since there are no depth 1 reads
-    // they need to wait for
-    nextTickMemsReady := !curTickDoesRamWriteToDepth1 || !nextTickDoesRamReadAtDepth1
+    nextTickMemsReady := nextTickMemsReadTmp
   }
 
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
