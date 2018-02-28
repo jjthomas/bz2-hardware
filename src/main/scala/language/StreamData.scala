@@ -18,6 +18,8 @@ sealed abstract class StreamBits(width: Int) extends Product {
 case class Add(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
 case class Subtract(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
 case class Concat(first: StreamBits, second: StreamBits) extends StreamBits(first.getWidth + second.getWidth)
+case class StreamMux(cond: StreamBool, t: StreamBits, f: StreamBits)
+  extends StreamBits(math.max(t.getWidth, f.getWidth))
 
 case class Equal(first: StreamBits, second: StreamBits) extends StreamBool
 case class NotEqual(first: StreamBits, second: StreamBits) extends StreamBool

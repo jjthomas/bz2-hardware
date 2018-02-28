@@ -136,9 +136,17 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case s: BRAMSelect => reads(s.arg.stateId).append((cond, s.idx))
       case _ =>
     }
-    b.productIterator.foreach {
-      case s: StreamBits => addRAMReads(cond, s, reads)
+    b match {
+      case m: StreamMux => {
+        addRAMReads(cond, m.cond, reads)
+        addRAMReads(cond && m.cond, m.t, reads)
+        addRAMReads(cond && !m.cond, m.f, reads)
+      }
       case _ =>
+        b.productIterator.foreach {
+          case s: StreamBits => addRAMReads(cond, s, reads)
+          case _ =>
+        }
     }
   }
 
@@ -276,6 +284,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case r: StreamReg => s"reg${r.stateId}_read"
       case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
       case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
+      case m: StreamMux => s"(${genCBool(m.cond)} ? ${genCBits(m.t)} : ${genCBits(m.f)})"
       case b: StreamBool => genCBool(b) // treat the bool as regular bits
       case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
     }
@@ -602,6 +611,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           simBramsRead(b.arg.stateId)(addr)
         }
         case v: VectorRegSelect => simVectorRegsRead(v.arg.stateId)(genSimBits(v.idx).toInt)
+        case m: StreamMux => if (genSimBool(m.cond)) genSimBits(m.t) else genSimBits(m.f)
         case b: StreamBool => genSimBool(b) // treat the bool as regular bits
         case _ => throw new StreamException("unexpected type in genSimBits: " + b.getClass.toString)
       }
