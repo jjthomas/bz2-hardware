@@ -216,8 +216,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
   def genBits(b: StreamBits, useNextToken: GenBitsCase): UInt = {
     b match {
-      case l: Literal => l.l.U
-      case a: Add => genBits(a.first, useNextToken) + genBits(a.second, useNextToken)
+      case l: Literal => l.l.asUInt(l.getWidth.W)
+      case a: Add => genBits(a.first, useNextToken) +& genBits(a.second, useNextToken)
       case s: Subtract => genBits(s.first, useNextToken) - genBits(s.second, useNextToken)
       case c: Concat => genBits(c.first, useNextToken)##genBits(c.second, useNextToken)
       case i: StreamInput => if (useNextToken == CUR_TICK) inputReg else
@@ -595,7 +595,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       b match {
         case l: Literal => l.l
         case a: Add => genSimBits(a.first) + genSimBits(a.second)
-        case s: Subtract => genSimBits(s.first) - genSimBits(s.second)
+        case s: Subtract => {
+          val first = genSimBits(s.first)
+          val second = genSimBits(s.second)
+          require(first >= second)
+          first - second
+        }
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
         case i: StreamInput => inputWord
         case s: BitSelect => {

@@ -15,7 +15,7 @@ sealed abstract class StreamBits(width: Int) extends Product {
   def B = BoolCast(this)
 }
 
-case class Add(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
+case class Add(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth) + 1)
 case class Subtract(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
 case class Concat(first: StreamBits, second: StreamBits) extends StreamBits(first.getWidth + second.getWidth)
 case class StreamMux(cond: StreamBool, t: StreamBits, f: StreamBits)
@@ -28,7 +28,7 @@ case class GreaterThan(first: StreamBits, second: StreamBits) extends StreamBool
 case class LessThanEqual(first: StreamBits, second: StreamBits) extends StreamBool
 case class GreaterThanEqual(first: StreamBits, second: StreamBits) extends StreamBool
 
-case class Literal(l: BigInt) extends StreamBits(l.bitLength)
+case class Literal(l: BigInt, width: Int) extends StreamBits(width)
 
 case class StreamInput(chan: Int) extends StreamBits(Builder.curBuilder.inputWidth) {
   require(chan == 0, "multiple input channels currently not supported")
