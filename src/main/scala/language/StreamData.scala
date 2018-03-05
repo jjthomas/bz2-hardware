@@ -28,7 +28,9 @@ case class GreaterThan(first: StreamBits, second: StreamBits) extends StreamBool
 case class LessThanEqual(first: StreamBits, second: StreamBits) extends StreamBool
 case class GreaterThanEqual(first: StreamBits, second: StreamBits) extends StreamBool
 
-case class Literal(l: BigInt, width: Int) extends StreamBits(width)
+case class Literal(l: BigInt, width: Int) extends StreamBits(width) {
+  require(width > 0)
+}
 
 case class StreamInput(chan: Int) extends StreamBits(Builder.curBuilder.inputWidth) {
   require(chan == 0, "multiple input channels currently not supported")
