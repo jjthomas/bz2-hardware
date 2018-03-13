@@ -143,11 +143,11 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
         bits(bits.getWidth - 1, 8 - i /* 8 - i - 1 is the top bit that goes into updatedOut */), bitsRemainder)
     }
     swhen (valid) {
-      swhen(outputWordBits + topBit >= 7.L) {
+      swhen (outputWordBits + topBit >= 7.L) {
         Emit(0, updatedOut)
         outputWord := bitsRemainder
         outputWordBits := outputWordBits + topBit - 7.L
-      }.otherwise {
+      } .otherwise {
         outputWord := updatedOut
         outputWordBits := outputWordBits + topBit + 1.L
       }

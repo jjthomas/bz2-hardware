@@ -25,6 +25,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   val inner = Module(puFactory(coreId))
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
+  // TODO why do we need this register block at all? Just directly select the output from the BRAM
   val inputMemBlock = Reg(Vec(bramWidth, Bool()))
   val inputPieceBitsRemaining = RegInit(0.asUInt(util.log2Ceil(bramWidth + 1).W))
   val inputBitsRemaining = RegInit(0.asUInt(util.log2Ceil(bramLineSize + 1).W))
@@ -73,12 +74,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     }
   }
 
-  val nextWord =
-    if (wordBits == 0) {
-      inputMemBlock(0)
-    } else {
-      inputMemBlock.asUInt()(wordBits - 1, 0)
-    }
+  val nextWord = inputMemBlock.asUInt()(wordBits - 1, 0)
   inner.io.inputValid := !(inputPieceBitsRemaining === 0.U)
   inner.io.inputFinished := io.inputFinished && inputBitsRemaining === 0.U
   inner.io.inputWord := nextWord
