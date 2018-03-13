@@ -5,6 +5,112 @@ import language._
 
 import scala.collection.mutable.ArrayBuffer
 
+object IntegerCoder {
+  def runCoder(input: BigInt, numInputBits: Int, wordSize: Int, batchWords: Int): (BigInt, Int) = {
+    assert(numInputBits % (wordSize * batchWords) == 0)
+    var output: BigInt = 0
+    var numOutputBits = 0
+
+    def addToOutput(word: BigInt, numBits: Int): Unit = {
+      output = (word << numOutputBits) | output
+      numOutputBits += numBits
+    }
+
+    def bitLength(word: BigInt): BigInt = {
+      Math.max(1, word.bitLength)
+    }
+    def bitSelect(word: BigInt, upper: Int, lower: Int): BigInt = {
+      val numBits = upper - lower + 1
+      (word >> lower) & ((BigInt(1) << numBits) - 1)
+    }
+
+    def varintEncode(word: BigInt): (BigInt, Int) = {
+      var res: BigInt = 0
+      var numBits = 0
+      for (i <- 0 until bitLength(word).toInt by 7) {
+        res = (bitSelect(word, Math.min(bitLength(word).toInt - 1, i + 6), i) << numBits) | res
+        if (i + 7 < bitLength(word).toInt) {
+          res = (BigInt(1) << (numBits + 7)) | res
+        }
+        numBits += 8
+      }
+      (res, numBits)
+    }
+
+    def exceptionCost(bitCount: Array[Int]): (Boolean, Int) = {
+      val fixedCost = 1 + util.log2Ceil(wordSize) + (batchWords - bitCount(0)) * bitCount(1)
+      var varintCost = 1 + bitCount(2)
+      (fixedCost < varintCost, if (fixedCost < varintCost) fixedCost else varintCost)
+    }
+
+    def computeCost(width: Int, bitCount: Array[Int]): Int = {
+      width * bitCount(0) + exceptionCost(bitCount)._2
+    }
+
+    val bitWidths = Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, if (wordSize <= 32) 12 else 64, 13, 16, 20, 32)
+    val bitCounts = (0 until bitWidths.length).map(_ => Array(0, 0, 0)).toArray
+    var wordsConsumed = 0
+    val buffer = (0 until batchWords).map(_ => 0).toArray
+    for (i <- 0 until numInputBits by wordSize) {
+      val inputWord = (input >> i) & ((BigInt(1) << wordSize) - 1)
+      for ((width, j) <- bitWidths.zipWithIndex) {
+        if (bitLength(inputWord) <= width) {
+          bitCounts(j)(0) += 1
+        } else {
+          if (bitLength(inputWord) > bitCounts(j)(1)) {
+            bitCounts(j)(1) = bitLength(inputWord).toInt
+          }
+          bitCounts(j)(2) = varintEncode(inputWord)._2
+        }
+      }
+      buffer(wordsConsumed) = inputWord.toInt
+      wordsConsumed += 1
+      if (wordsConsumed == batchWords) {
+        var minWidthIdx = 0
+        for (j <- 1 until bitWidths.length) {
+          if (computeCost(bitWidths(j), bitCounts(j)) < computeCost(bitWidths(minWidthIdx), bitCounts(minWidthIdx))) {
+            minWidthIdx = j
+          }
+        }
+        addToOutput(minWidthIdx, util.log2Ceil(bitWidths.length))
+        addToOutput(batchWords - bitCounts(minWidthIdx)(0), util.log2Ceil(batchWords + 1))
+        for (j <- 0 until batchWords) {
+          if (bitLength(buffer(j)) <= bitWidths(minWidthIdx)) {
+            addToOutput(buffer(j), bitWidths(minWidthIdx))
+          }
+        }
+        if (bitCounts(minWidthIdx)(0) < batchWords) {
+          if (exceptionCost(bitCounts(minWidthIdx))._1) {
+            // fixed exceptions
+            addToOutput(0, 1)
+            addToOutput(bitCounts(minWidthIdx)(1) - 1, util.log2Ceil(wordSize))
+          } else {
+            // varint exceptions
+            addToOutput(1, 1)
+          }
+          for (j <- 0 until batchWords) {
+            if (bitLength(buffer(j)) > bitWidths(minWidthIdx)) {
+              addToOutput(j, util.log2Ceil(batchWords))
+              if (exceptionCost(bitCounts(minWidthIdx))._1) { // fixed
+                addToOutput(buffer(j), bitCounts(minWidthIdx)(1))
+              } else {
+                val varint = varintEncode(buffer(j))
+                addToOutput(varint._1, varint._2)
+              }
+            }
+          }
+        }
+        for (j <- 0 until bitCounts.length) {
+          bitCounts(j)(0) = 0
+          bitCounts(j)(1) = 0
+          bitCounts(j)(2) = 0
+        }
+        wordsConsumed = 0
+      }
+    }
+  }
+}
+
 class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends ProcessingUnit(8, coreId) {
   assert(wordSize % 8 == 0)
   assert(wordSize <= 64)
