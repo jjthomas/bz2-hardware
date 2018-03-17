@@ -246,6 +246,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           }
         }
       }
+      case m: StreamMux => Mux(genBool(m.cond, useNextToken), genBits(m.t, useNextToken), genBits(m.f, useNextToken))
       case b: StreamBool => genBool(b, useNextToken) // treat the bool as regular bits
       case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
