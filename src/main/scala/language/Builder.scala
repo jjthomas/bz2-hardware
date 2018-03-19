@@ -39,6 +39,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   lazy val conds = fullConds.map(t => (collapseContext(t._1), t._2))
 
   var inSwhile = false
+  var inInputContext = false
   val fullSwhileConds = new ArrayBuffer[Seq[StreamBool]]
   lazy val swhileConds = fullSwhileConds.map(c => collapseContext(c))
 
@@ -48,6 +49,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
   val inputReg = Reg(UInt(inputWidth.W))
   val inputRegValid = RegInit(false.B)
+  // marks if the current token is the finished token, is set once and remains true thereafter
+  val finishedReg = RegInit(false.B)
   // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
   var nextVectorRegs: Array[(UInt, UInt)] = null
@@ -72,6 +75,14 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
   def endSwhile(): Unit = {
     inSwhile = false
+  }
+
+  def startInputContext(): Unit = {
+    inInputContext = true
+  }
+
+  def endInputContext(): Unit = {
+    inInputContext = false
   }
 
   def startContext(c: StreamWhenContext): Unit = {
@@ -124,10 +135,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerAssignment(assignment: Assign): Unit = {
+    require(inInputContext, "statements must be in an onInput or onFinished block")
     fullAssignments.append((getContextCondition(), inSwhile, assignment))
   }
 
   def registerEmit(emit: Emit): Unit = {
+    require(inInputContext, "statements must be in an onInput or onFinished block")
     fullEmits.append((getContextCondition(), inSwhile, emit))
   }
 
@@ -223,6 +236,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case i: StreamInput => if (useNextToken == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
+      case f: StreamFinished => if (useNextToken == CUR_TICK) finishedReg else
+        // unless there is no current input or we are about to flush the current input, use the current value
+        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
       case r: StreamReg => {
         useNextToken match {
@@ -280,7 +296,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
       case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
       case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
-      case i: StreamInput => "input[i]"
+      case i: StreamInput => "input[min(i, input_len - 1)]"
+      case f: StreamFinished => "(i == input_len)"
       case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
       case r: StreamReg => s"reg${r.stateId}_read"
       case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
@@ -400,8 +417,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     when (!pipeActive) {
       when (!inputRegValid) { // no token now, so try to accept new input
         inputReg := io.inputWord
-        inputRegValid := io.inputValid && io.inputReady
-        pipeState := Mux(io.inputValid && io.inputReady, 1.U, 0.U)
+        finishedReg := io.inputFinished
+        inputRegValid := (io.inputFinished && !finishedReg) || io.inputValid
+        pipeState := Mux((io.inputFinished && !finishedReg) || io.inputValid, 1.U, 0.U)
       } .otherwise { // we have a max one cycle delay for BRAM writes to commit at the end of the previous tick, so must
         // be safe to reactivate pipe
         pipeState := 1.U
@@ -409,13 +427,17 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     } .elsewhen (pipeFinishing) { // active tick in the pipeline that had no output or whose output is accepted
       when (swhileDone) { // current token done, so try to accept new input
         inputReg := io.inputWord
-        inputRegValid := io.inputValid && io.inputReady
-        pipeState := Mux(io.inputValid && io.inputReady, 1.U, 0.U)
+        when (nextTickMemsReady) {
+          finishedReg := io.inputFinished
+        }
+        inputRegValid := ((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady // mark the input
+        // valid even for the finished token to keep the pipe state machine in order
+        pipeState := Mux(((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady, 1.U, 0.U)
       } .otherwise { // may be possible to start another tick now
         pipeState := Mux(nextTickMemsReady, 1.U, 0.U)
       }
     }
-    io.outputFinished := io.inputFinished && !pipeActive
+    io.outputFinished := finishedReg && !pipeActive
 
     // emits
     var curEmit = genBits(emits(0)._3.data, CUR_TICK)
@@ -587,6 +609,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
 
     var inputWord: BigInt = null
+    var inputFinished: Boolean = false
 
     def truncate(b: BigInt, bits: Int): BigInt = {
       b & ((BigInt(1) << bits) - 1)
@@ -604,6 +627,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         }
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
         case i: StreamInput => inputWord
+        case f: StreamFinished => inputFinished
         case s: BitSelect => {
           val numBits = s.upper - s.lower + 1
           (genSimBits(s.arg) >> s.lower) & ((BigInt(1) << numBits) - 1)
@@ -652,8 +676,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
     var numOutputBits = 0
     var output = BigInt(0)
-    for (i <- 0 until numInputBits by inputWidth) {
+    for (i <- 0 until numInputBits + 1 by inputWidth) {
       inputWord = (inputBits >> i) & ((BigInt(1) << inputWidth) - 1)
+      inputFinished = i == numInputBits
       var simSwhileDone = false
       do {
         simSwhileDone = fullSwhileConds.map(c => !evalFullCond(c)).foldLeft(true)((b1, b2) => b1 && b2)
@@ -806,7 +831,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     emitVectorInit(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
     emitVectorInit(cw, brams.asInstanceOf[ArrayBuffer[Any]])
-    cw.writeLine("for (uint32_t i = 0; i < input_len; i++) {")
+    cw.writeLine("for (uint32_t i = 0; i <= input_len; i++) {")
     cw.writeLine("uint8_t swhile_done = 0;")
     cw.writeLine("do {")
     cw.writeLine(

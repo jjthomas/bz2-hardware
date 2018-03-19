@@ -14,6 +14,15 @@ object swhile {
   }
 }
 
+object onInput {
+  def apply(block: => Unit): StreamInputContext = {
+    Builder.curBuilder.startInputContext()
+    new StreamWhenContext(!StreamFinished, null, !StreamFinished, block)
+    Builder.curBuilder.endInputContext()
+    new StreamInputContext
+  }
+}
+
 class StreamWhenContext(val cond: StreamBool, prevCond: StreamBool, val soloCond: StreamBool,
                         block: => Unit) {
   def elsewhen(elseCond: StreamBool)(block: => Unit): StreamWhenContext = {
@@ -27,4 +36,12 @@ class StreamWhenContext(val cond: StreamBool, prevCond: StreamBool, val soloCond
   Builder.curBuilder.startContext(this)
   block
   Builder.curBuilder.endContext()
+}
+
+class StreamInputContext {
+  def onFinished(block: => Unit): Unit = {
+    Builder.curBuilder.startInputContext()
+    new StreamWhenContext(StreamFinished, null, StreamFinished, block)
+    Builder.curBuilder.endInputContext()
+  }
 }

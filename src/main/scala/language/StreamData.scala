@@ -36,6 +36,8 @@ case class StreamInput(chan: Int) extends StreamBits(Builder.curBuilder.inputWid
   require(chan == 0, "multiple input channels currently not supported")
 }
 
+case object StreamFinished extends StreamBool
+
 case class BitSelect(arg: StreamBits, upper: Int, lower: Int) extends StreamBits(upper - lower + 1)
 
 sealed abstract class StreamBool extends StreamBits(1) {
