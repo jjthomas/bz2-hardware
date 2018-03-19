@@ -32,9 +32,7 @@ case class Literal(l: BigInt, width: Int) extends StreamBits(width) {
   require(width > 0)
 }
 
-case class StreamInput(chan: Int) extends StreamBits(Builder.curBuilder.inputWidth) {
-  require(chan == 0, "multiple input channels currently not supported")
-}
+case object StreamInput extends StreamBits(Builder.curBuilder.inputWidth)
 
 case object StreamFinished extends StreamBool
 

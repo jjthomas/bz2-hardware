@@ -155,7 +155,7 @@ object JsonFieldExtractor {
 
         swhen(parseState === CONF_SEQ.id.L || parseState === CONF_SPLIT.id.L) {
           swhen(configWordNum === (numWordsForConfigToken - 1).L) {
-            val finalConfigToken = StreamInput(0) ## configToken((numWordsForConfigToken - 1) * 8 - 1, 0)
+            val finalConfigToken = StreamInput ## configToken((numWordsForConfigToken - 1) * 8 - 1, 0)
             swhen(finalConfigToken === ((BigInt(1) << (numWordsForConfigToken * 8)) - 1).L) {
               swhen(parseState === CONF_SEQ.id.L) {
                 parseState := CONF_SPLIT.id.L
@@ -199,14 +199,14 @@ object JsonFieldExtractor {
 
       def popStateStackWithFieldSep = {
         swhen(matchState === maxMatchId.L) {
-          Emit(0, ','.toInt.L)
+          Emit(','.toInt.L)
         }
         popStateStack
       }
 
       def emitCurToken = {
         swhen(matchState === maxMatchId.L) {
-          Emit(0, StreamInput(0))
+          Emit(StreamInput)
         }
       }
 
@@ -215,35 +215,35 @@ object JsonFieldExtractor {
           swhile(matchStrEmitCounter < (matchStrChars - 1).L) {
             for (i <- 0 until (matchStrChars - 1)) {
               swhen(matchStrEmitCounter === i.L) {
-                Emit(0, output((i + 1) * 8 - 1, i * 8))
+                Emit(output((i + 1) * 8 - 1, i * 8))
               }
             }
             matchStrEmitCounter := matchStrEmitCounter + 1.L
           }
-          Emit(0, output(output.getWidth - 1, (matchStrChars - 1) * 8))
+          Emit(output(output.getWidth - 1, (matchStrChars - 1) * 8))
           matchStrEmitCounter := 0.L
         }
       }
 
       swhen(parseState === EXP_VAL.id.L) {
-        swhen(StreamInput(0) === '{'.toInt.L) {
+        swhen(StreamInput === '{'.toInt.L) {
           parseState := EXP_KEY.id.L
           nestDepth := nestDepth + 1.L
-        }.elsewhen(nestDepth =/= 0.L && !isWhitespace(StreamInput(0))) {
+        }.elsewhen(nestDepth =/= 0.L && !isWhitespace(StreamInput)) {
           // at nestDepth of 0 we only accept new records
           emitCurToken
           parseState := IN_VAL.id.L
-          inStringValue := StreamInput(0) === '"'.toInt.L
+          inStringValue := StreamInput === '"'.toInt.L
         }
       }
       swhen(parseState === IN_VAL.id.L) {
         swhen(inStringValue.B) {
           emitCurToken
-          swhen(StreamInput(0) === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
+          swhen(StreamInput === '"'.toInt.L && lastChar =/= '\\'.toInt.L) {
             inStringValue := false.L
           }
-        }.elsewhen(StreamInput(0) =/= '}'.toInt.L) {
-          swhen(StreamInput(0) === ','.toInt.L) {
+        }.elsewhen(StreamInput =/= '}'.toInt.L) {
+          swhen(StreamInput === ','.toInt.L) {
             parseState := EXP_KEY.id.L
             popStateStackWithFieldSep
           }.otherwise {
@@ -251,15 +251,15 @@ object JsonFieldExtractor {
           }
         }
       }
-      swhen(StreamInput(0) === ','.toInt.L && parseState === EXP_COM.id.L) {
+      swhen(StreamInput === ','.toInt.L && parseState === EXP_COM.id.L) {
         parseState := EXP_KEY.id.L
         popStateStackWithFieldSep
       }
-      swhen(StreamInput(0) === '}'.toInt.L &&
+      swhen(StreamInput === '}'.toInt.L &&
         (parseState === EXP_KEY.id.L || parseState === EXP_COM.id.L ||
           (parseState === IN_VAL.id.L && !inStringValue.B))) {
         swhen(nestDepth === 1.L) {
-          Emit(0, '/'.toInt.L) // record separator
+          Emit('/'.toInt.L) // record separator
           parseState := EXP_VAL.id.L
         }.otherwise {
           parseState := EXP_COM.id.L
@@ -274,7 +274,7 @@ object JsonFieldExtractor {
         nestDepth := nestDepth - 1.L
       }
 
-      val enteringKey = StreamInput(0) === '"'.toInt.L && parseState === EXP_KEY.id.L
+      val enteringKey = StreamInput === '"'.toInt.L && parseState === EXP_KEY.id.L
       swhen(enteringKey) {
         parseState := IN_KEY.id.L
         stateStack(0) := matchState
@@ -286,8 +286,8 @@ object JsonFieldExtractor {
         (matchState =/= 0.L || nestDepth === 1.L)) {
         // only allow match to start at top level
         val selectedSeqEl = if (seqTransRam == null) seqTransVec(matchState) else seqTransRam(matchState)
-        swhen(StreamInput(0) === selectedSeqEl(stateBits + 7, stateBits)) {
-          emitMatchStateIfMatched(selectedSeqEl(stateBits - 1, 0), matchState ## StreamInput(0))
+        swhen(StreamInput === selectedSeqEl(stateBits + 7, stateBits)) {
+          emitMatchStateIfMatched(selectedSeqEl(stateBits - 1, 0), matchState ## StreamInput)
           matchState := selectedSeqEl(stateBits - 1, 0)
         }.otherwise {
           var noSplit: StreamBool = true.L.B
@@ -295,10 +295,10 @@ object JsonFieldExtractor {
             for (i <- 0 until splitTransVec.numEls) {
               val selectedSplitEl = splitTransVec(i.L)
               val splitMatch = matchState === selectedSplitEl(stateBits - 1, 0) &&
-                StreamInput(0) === selectedSplitEl(2 * stateBits + 7, 2 * stateBits)
+                StreamInput === selectedSplitEl(2 * stateBits + 7, 2 * stateBits)
               noSplit = noSplit && !splitMatch
               swhen(splitMatch) {
-                emitMatchStateIfMatched(selectedSplitEl(2 * stateBits - 1, stateBits), matchState ## StreamInput(0))
+                emitMatchStateIfMatched(selectedSplitEl(2 * stateBits - 1, stateBits), matchState ## StreamInput)
                 matchState := selectedSplitEl(2 * stateBits - 1, stateBits)
               }
             }
@@ -308,13 +308,13 @@ object JsonFieldExtractor {
           }
         }
       }
-      swhen(StreamInput(0) === '"'.toInt.L && parseState === IN_KEY.id.L) {
+      swhen(StreamInput === '"'.toInt.L && parseState === IN_KEY.id.L) {
         parseState := EXP_COL.id.L
       }
-      swhen(StreamInput(0) === ':'.toInt.L && parseState === EXP_COL.id.L) {
+      swhen(StreamInput === ':'.toInt.L && parseState === EXP_COL.id.L) {
         parseState := EXP_VAL.id.L
       }
-      lastChar := StreamInput(0)
+      lastChar := StreamInput
     }
   }
 

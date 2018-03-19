@@ -233,10 +233,10 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case a: Add => genBits(a.first, useNextToken) +& genBits(a.second, useNextToken)
       case s: Subtract => genBits(s.first, useNextToken) - genBits(s.second, useNextToken)
       case c: Concat => genBits(c.first, useNextToken)##genBits(c.second, useNextToken)
-      case i: StreamInput => if (useNextToken == CUR_TICK) inputReg else
+      case i: StreamInput.type => if (useNextToken == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
-      case f: StreamFinished => if (useNextToken == CUR_TICK) finishedReg else
+      case f: StreamFinished.type => if (useNextToken == CUR_TICK) finishedReg else
         // unless there is no current input or we are about to flush the current input, use the current value
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
@@ -296,8 +296,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
       case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
       case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
-      case i: StreamInput => "input[min(i, input_len - 1)]"
-      case f: StreamFinished => "(i == input_len)"
+      case i: StreamInput.type => "input[min(i, input_len - 1)]"
+      case f: StreamFinished.type => "(i == input_len)"
       case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
       case r: StreamReg => s"reg${r.stateId}_read"
       case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
@@ -626,8 +626,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           first - second
         }
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
-        case i: StreamInput => inputWord
-        case f: StreamFinished => inputFinished
+        case i: StreamInput.type => inputWord
+        case f: StreamFinished.type => inputFinished
         case s: BitSelect => {
           val numBits = s.upper - s.lower + 1
           (genSimBits(s.arg) >> s.lower) & ((BigInt(1) << numBits) - 1)

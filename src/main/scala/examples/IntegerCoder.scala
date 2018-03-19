@@ -252,7 +252,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
     }
     swhen (valid) {
       swhen (outputWordBits + topBit >= 7.L) {
-        Emit(0, updatedOut)
+        Emit(updatedOut)
         outputWord := bitsRemainder
         outputWordBits := outputWordBits + topBit - 7.L
       } .otherwise {
@@ -263,15 +263,15 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
   }
 
   onInput {
-    val finalInputWord = if (wordSize > 8) StreamInput(0) ## curWord(8 * (wordBytes - 1) - 1, 0) else StreamInput(0)
+    val finalInputWord = if (wordSize > 8) StreamInput ## curWord(8 * (wordBytes - 1) - 1, 0) else StreamInput
     val bufWord = buffer(wordIdx)
     val curLeadingZeros = leadingZeros(StreamMux(curState === READ_INPUT.id.L, finalInputWord, bufWord))
     val curBitLen = wordSize.L - curLeadingZeros
     swhen(curState === READ_INPUT.id.L) {
       for (i <- 0 until wordBytes - 1) {
         swhen(byteIdx === i.L) {
-          curWord := (if (i == 0) curWord(8 * wordBytes - 1, 8) ## StreamInput(0)
-          else curWord(8 * wordBytes - 1, 8 * (i + 1)) ## StreamInput(0) ## curWord(8 * i - 1, 0))
+          curWord := (if (i == 0) curWord(8 * wordBytes - 1, 8) ## StreamInput
+          else curWord(8 * wordBytes - 1, 8 * (i + 1)) ## StreamInput ## curWord(8 * i - 1, 0))
         }
       }
       swhen(byteIdx === (wordBytes - 1).L) {
@@ -427,7 +427,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
     }
   } .onFinished {
     swhen (outputWordBits > 0.L) {
-      Emit(0, outputWord)
+      Emit(outputWord)
     }
   }
   Builder.curBuilder.compile()
