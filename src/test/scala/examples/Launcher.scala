@@ -8,6 +8,8 @@ import examples.JsonFieldExtractor.{JsonFieldExtractorGeneric, JsonFieldExtracto
 import language.Builder
 import utils.TutorialRunner
 
+import scala.util.Random
+
 object Launcher {
   def runStreamingTest(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
                        outputs: Array[(Int, BigInt)]): StreamingWrapperTests = {
@@ -243,6 +245,19 @@ object Launcher {
               s"${matchStrs(2)}4,/", "/", "/").map(str => Util.charsToBits(str.toCharArray))
             Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"))
             runStreamingTest(c, inputs, outputs)
+          }
+        }
+      },
+      "StreamingWrapper9" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) =>
+          new IntegerCoder(32, 4, coreId)), backendName) {
+          (c) => {
+            val seed = Random.nextLong()
+            println("random seed: " + seed)
+            val input = IntegerCoder.genRandomWords(32, 4, seed)
+            val output = IntegerCoder.runCoder(input._1, input._2, 32, 4)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
         }
       }

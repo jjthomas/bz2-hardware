@@ -176,9 +176,9 @@ object JsonFieldExtractor {
             for (i <- 0 until numWordsForConfigToken - 1) {
               swhen(configWordNum === i.L) {
                 if (i == 0) {
-                  configToken := configToken(numWordsForConfigToken * 8 - 1, 8) ## StreamInput(0)
+                  configToken := configToken(numWordsForConfigToken * 8 - 1, 8) ## StreamInput
                 } else {
-                  configToken := configToken(numWordsForConfigToken * 8 - 1, 8 * (i + 1)) ## StreamInput(0) ##
+                  configToken := configToken(numWordsForConfigToken * 8 - 1, 8 * (i + 1)) ## StreamInput ##
                     configToken(8 * i - 1, 0)
                 }
               }

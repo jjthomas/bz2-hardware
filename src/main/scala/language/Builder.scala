@@ -236,9 +236,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case i: StreamInput.type => if (useNextToken == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
-      case f: StreamFinished.type => if (useNextToken == CUR_TICK) finishedReg else
-        // unless there is no current input or we are about to flush the current input, use the current value
-        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
       case r: StreamReg => {
         useNextToken match {
@@ -280,6 +277,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case l: LessThanEqual => genBits(l.first, useNextToken) <= genBits(l.second, useNextToken)
       case g: GreaterThan => genBits(g.first, useNextToken) > genBits(g.second, useNextToken)
       case g: GreaterThanEqual => genBits(g.first, useNextToken) >= genBits(g.second, useNextToken)
+      case f: StreamFinished.type => if (useNextToken == CUR_TICK) finishedReg else
+        // unless there is no current input or we are about to flush the current input, use the current value
+        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case _ => throw new StreamException("unexpected type in genBool: " + b.getClass.toString)
     }
   }
@@ -297,7 +297,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
       case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
       case i: StreamInput.type => "input[min(i, input_len - 1)]"
-      case f: StreamFinished.type => "(i == input_len)"
       case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
       case r: StreamReg => s"reg${r.stateId}_read"
       case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
@@ -320,6 +319,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case l: LessThanEqual => s"(${genCBits(l.first)} <= ${genCBits(l.second)})"
       case g: GreaterThan => s"(${genCBits(g.first)} > ${genCBits(g.second)})"
       case g: GreaterThanEqual => s"(${genCBits(g.first)} >= ${genCBits(g.second)})"
+      case f: StreamFinished.type => "(i == input_len)"
       case _ => throw new StreamException("unexpected type in genCBool: " + b.getClass.toString)
     }
   }
@@ -627,7 +627,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         }
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
         case i: StreamInput.type => inputWord
-        case f: StreamFinished.type => inputFinished
         case s: BitSelect => {
           val numBits = s.upper - s.lower + 1
           (genSimBits(s.arg) >> s.lower) & ((BigInt(1) << numBits) - 1)
@@ -659,6 +658,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         case l: LessThanEqual => genSimBits(l.first) <= genSimBits(l.second)
         case g: GreaterThan => genSimBits(g.first) > genSimBits(g.second)
         case g: GreaterThanEqual => genSimBits(g.first) >= genSimBits(g.second)
+        case f: StreamFinished.type => inputFinished
         case _ => throw new StreamException("unexpected type in genSimBool: " + b.getClass.toString)
       }
     }

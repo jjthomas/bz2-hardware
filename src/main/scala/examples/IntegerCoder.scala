@@ -4,9 +4,10 @@ import chisel3.util
 import language._
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
 object IntegerCoder {
-  def runCoder(input: BigInt, numInputBits: Int, wordSize: Int, batchWords: Int): (BigInt, Int) = {
+  def runCoder(numInputBits: Int, input: BigInt, wordSize: Int, batchWords: Int): (Int, BigInt) = {
     assert(numInputBits % (wordSize * batchWords) == 0)
     var output: BigInt = 0
     var numOutputBits = 0
@@ -109,7 +110,22 @@ object IntegerCoder {
         wordsConsumed = 0
       }
     }
-    (output, numOutputBits)
+    ((numOutputBits + 7) / 8 * 8, output)
+  }
+
+  def genRandomWords(wordSize: Int, numWords: Int, seed: Long): (Int, BigInt) = {
+    var output: BigInt = 0
+    var numOutputBits = 0
+
+    Random.setSeed(seed)
+    for (i <- 0 until numWords) {
+      val numBits = Random.nextInt(wordSize) + 1
+      var nextWord = Random.nextLong()
+      nextWord = if (numBits == 64) nextWord else nextWord & ((1L << numBits) - 1)
+      output = (BigInt(nextWord) << numOutputBits) | output
+      numOutputBits += wordSize
+    }
+    (numOutputBits, output)
   }
 }
 
