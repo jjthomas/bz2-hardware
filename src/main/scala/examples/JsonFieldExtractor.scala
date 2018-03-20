@@ -146,13 +146,12 @@ object JsonFieldExtractor {
     val matchStrChars = ((stateBits + 8) + 8 - 1) / 8
     val matchStrEmitCounter = StreamReg(util.log2Ceil(matchStrChars), 0)
 
-    onInput {
-      if (seqTrans == null) {
-        val numWordsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8
-        val configToken = StreamReg(numWordsForConfigToken * 8, null)
-        val configWordNum = StreamReg(util.log2Ceil(numWordsForConfigToken), 0)
-        val configTokenNum = StreamReg(util.log2Ceil(maxMatchId), 0)
-
+    if (seqTrans == null) {
+      val numWordsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8
+      val configToken = StreamReg(numWordsForConfigToken * 8, null)
+      val configWordNum = StreamReg(util.log2Ceil(numWordsForConfigToken), 0)
+      val configTokenNum = StreamReg(util.log2Ceil(maxMatchId), 0)
+      onInput {
         swhen(parseState === CONF_SEQ.id.L || parseState === CONF_SPLIT.id.L) {
           swhen(configWordNum === (numWordsForConfigToken - 1).L) {
             val finalConfigToken = StreamInput ## configToken((numWordsForConfigToken - 1) * 8 - 1, 0)
@@ -187,44 +186,46 @@ object JsonFieldExtractor {
           }
         }
       }
+    }
 
-      def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
+    def isWhitespace(c: StreamBits) = c === ' '.toInt.L || c === '\n'.toInt.L || c === '\t'.toInt.L
 
-      def popStateStack = {
-        matchState := stateStack(0)
-        for (i <- 0 until stateStack.length - 1) {
-          stateStack(i) := stateStack(i + 1)
-        }
+    def popStateStack = {
+      matchState := stateStack(0)
+      for (i <- 0 until stateStack.length - 1) {
+        stateStack(i) := stateStack(i + 1)
       }
+    }
 
-      def popStateStackWithFieldSep = {
-        swhen(matchState === maxMatchId.L) {
-          Emit(','.toInt.L)
-        }
-        popStateStack
+    def popStateStackWithFieldSep = {
+      swhen(matchState === maxMatchId.L) {
+        Emit(','.toInt.L)
       }
+      popStateStack
+    }
 
-      def emitCurToken = {
-        swhen(matchState === maxMatchId.L) {
-          Emit(StreamInput)
-        }
+    def emitCurToken = {
+      swhen(matchState === maxMatchId.L) {
+        Emit(StreamInput)
       }
+    }
 
-      def emitMatchStateIfMatched(nextMatchState: StreamBits, output: StreamBits) = {
-        swhen(nextMatchState === maxMatchId.L) {
-          swhile(matchStrEmitCounter < (matchStrChars - 1).L) {
-            for (i <- 0 until (matchStrChars - 1)) {
-              swhen(matchStrEmitCounter === i.L) {
-                Emit(output((i + 1) * 8 - 1, i * 8))
-              }
+    def emitMatchStateIfMatched(nextMatchState: StreamBits, output: StreamBits) = {
+      swhen(nextMatchState === maxMatchId.L) {
+        swhile(matchStrEmitCounter < (matchStrChars - 1).L) {
+          for (i <- 0 until (matchStrChars - 1)) {
+            swhen(matchStrEmitCounter === i.L) {
+              Emit(output((i + 1) * 8 - 1, i * 8))
             }
-            matchStrEmitCounter := matchStrEmitCounter + 1.L
           }
-          Emit(output(output.getWidth - 1, (matchStrChars - 1) * 8))
-          matchStrEmitCounter := 0.L
+          matchStrEmitCounter := matchStrEmitCounter + 1.L
         }
+        Emit(output(output.getWidth - 1, (matchStrChars - 1) * 8))
+        matchStrEmitCounter := 0.L
       }
+    }
 
+    onInput {
       swhen(parseState === EXP_VAL.id.L) {
         swhen(StreamInput === '{'.toInt.L) {
           parseState := EXP_KEY.id.L

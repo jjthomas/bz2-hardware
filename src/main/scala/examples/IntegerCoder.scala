@@ -441,7 +441,8 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
         t._3 := 0.L
       }
     }
-  } .onFinished {
+  }
+  onFinished {
     swhen (outputWordBits > 0.L) {
       Emit(outputWord)
     }
