@@ -55,7 +55,8 @@ sealed abstract class AssignableStreamData(width: Int) extends StreamBits(width)
   def :=(rhs: StreamBits) = Assign(this, rhs)
 }
 
-case class StreamWire(width: Int) extends AssignableStreamData(width) {
+case class StreamVar(init: StreamBits = null, private val width: Int = 0)
+  extends AssignableStreamData(if (init == null) width else init.getWidth) {
   val stateId = Builder.curBuilder.registerAssignable(this)
 }
 

@@ -30,6 +30,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val vectorRegs = new ArrayBuffer[StreamVectorReg]
   // semantics for BRAM is single read, single write per tick
   val brams = new ArrayBuffer[StreamBRAM]
+  val vars = new ArrayBuffer[(Int, StreamBits)]
 
   val fullAssignments = new ArrayBuffer[(Seq[StreamBool], Boolean, Assign)]
   lazy val assignments = fullAssignments.map(t => (collapseContext(t._1), t._2, t._3))
@@ -46,6 +47,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val chiselRegs = new ArrayBuffer[UInt]
   val chiselVectorRegs = new ArrayBuffer[Vec[UInt]]
   val chiselBrams = new ArrayBuffer[DualPortBRAM]
+  val chiselVars = new ArrayBuffer[UInt]
 
   val inputReg = Reg(UInt(inputWidth.W))
   val inputRegValid = RegInit(false.B)
@@ -54,6 +56,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
   var nextVectorRegs: Array[(UInt, UInt)] = null
+  var nextVars: Array[UInt] = null
   val swhileDone = Wire(Bool())
   // all BRAM reads for active tick are ready
   val pipeFinalState = Wire(Bool())
@@ -111,7 +114,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         vectorRegs.append(v)
         vectorRegs.length - 1
       }
-      case _ => throw new StreamException("registers, vector registers, and BRAMs are the only supported " +
+      case v: StreamVar => {
+        vars.append((v.getWidth, v.init))
+        vars.length - 1
+      }
+      case _ => throw new StreamException("registers, vector registers, BRAMs, and vars are the only supported " +
         "assignables for now")
     }
   }
@@ -136,7 +143,18 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
   def registerAssignment(assignment: Assign): Unit = {
     require(inInputContext, "statements must be in an onInput or onFinished block")
-    fullAssignments.append((getContextCondition(), inSwhile, assignment))
+    assignment.lhs match {
+      // TODO var that is defined outside of swhile and set both inside and outside swhile is undefined, we should
+      // probably check for this case
+      case v: StreamVar =>
+        if (vars(v.stateId)._2 == null) {
+          vars(v.stateId) = (vars(v.stateId)._1, assignment.rhs)
+        } else {
+          vars(v.stateId) = (vars(v.stateId)._1,
+            StreamMux(collapseContext(getContextCondition()), assignment.rhs, vars(v.stateId)._2))
+        }
+      case _ => fullAssignments.append((getContextCondition(), inSwhile, assignment))
+    }
   }
 
   def registerEmit(emit: Emit): Unit = {
@@ -155,6 +173,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         addRAMReads(cond && m.cond, m.t, reads)
         addRAMReads(cond && !m.cond, m.f, reads)
       }
+      case v: StreamVar => addRAMReads(cond, vars(v.stateId)._2, reads) // when computing RAM dependencies, we always
+      // want to assume that vars are inlined
       case _ =>
         b.productIterator.foreach {
           case s: StreamBits => addRAMReads(cond, s, reads)
@@ -168,20 +188,31 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case sel: BRAMSelect => s += sel.arg.stateId
       case _ =>
     }
-    b.productIterator.foreach {
-      case sb: StreamBits => collectAllReads(sb, s)
+    b match {
+      case v: StreamVar => collectAllReads(vars(v.stateId)._2, s)
       case _ =>
+        b.productIterator.foreach {
+          case sb: StreamBits => collectAllReads(sb, s)
+          case _ =>
+        }
     }
     s
   }
 
+  // add dependencies to reads in b
+  // deps is set of dependencies that come from the condition on b
+  // table format: for each BRAM, (dependencies, set of read idxs, and whether it has an indirect read)
   def addDependencies(b: StreamBits, deps: mutable.Set[Int],
                       table: Array[(mutable.Set[Int], mutable.Set[StreamBits], Boolean)]): mutable.Set[Int] = {
-                      // returns set of BRAMs read
+                      // returns set of BRAMs read in b
     val bramsRead = new mutable.HashSet[Int]
-    b.productIterator.foreach {
-      case sb: StreamBits => bramsRead ++= addDependencies(sb, deps, table)
+    b match {
+      case v: StreamVar => bramsRead ++= addDependencies(vars(v.stateId)._2, deps, table)
       case _ =>
+        b.productIterator.foreach {
+          case sb: StreamBits => bramsRead ++= addDependencies(sb, deps, table)
+          case _ =>
+        }
     }
     b match {
       case sel: BRAMSelect => {
@@ -199,12 +230,15 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     bramsRead
   }
 
+  // using the table produced by addDependencies, compute the entry in the depths array for curRam, computing entries
+  // for its dependencies if needed
   def determineReadDepthsHelper(table: Array[(mutable.Set[Int], mutable.Set[StreamBits], Boolean)], depths: Array[Int],
                                 curRam: Int, curCallDepth: Int): Unit = {
     require(curCallDepth < depths.length, "cycle in BRAM read dependency graph")
     if (depths(curRam) != 0) {
       return
     }
+    // case where curRam has no dependencies or has only one distinct read idx (and no indirect reads)
     if (table(curRam)._1.size == 0 || (!table(curRam)._3 && table(curRam)._2.size <= 1)) {
       depths(curRam) = 1
       return
@@ -261,6 +295,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
       case m: StreamMux => Mux(genBool(m.cond, useNextToken), genBits(m.t, useNextToken), genBits(m.f, useNextToken))
       case b: StreamBool => genBool(b, useNextToken) // treat the bool as regular bits
+      case v: StreamVar => if (useNextToken == CUR_TICK) chiselVars(v.stateId) else nextVars(v.stateId) // don't need
+      // Mux(pipeFinishing, ...) around nextVars because any regs it depends on are already muxed
       case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
   }
@@ -303,6 +339,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
       case m: StreamMux => s"(${genCBool(m.cond)} ? ${genCBits(m.t)} : ${genCBits(m.f)})"
       case b: StreamBool => genCBool(b) // treat the bool as regular bits
+      case v: StreamVar => s"var_${v.stateId}"
       case _ => throw new StreamException("unexpected type in genCBits: " + b.getClass.toString)
     }
   }
@@ -364,6 +401,13 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       chiselBrams.append(Module(new DualPortBRAM(b.width, util.log2Ceil(b.numEls))))
       bramReads(i) = new ArrayBuffer[(StreamBool, StreamBits)]
       bramWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]
+    }
+    // separate loop for initialization because one chiselVar may depend on another
+    for ((varWidth, _) <- vars) {
+      chiselVars.append(Wire(UInt(varWidth.W)))
+    }
+    for (((_, varExpr), i) <- vars.zipWithIndex) {
+      chiselVars(i) := genBits(varExpr, CUR_TICK)
     }
 
     def assignIdxOr0(a: AssignableStreamData): StreamBits = {
@@ -484,6 +528,15 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
 
+    // next vars
+    nextVars = new Array[UInt](vars.length)
+    for (((varWidth, _), i) <- vars.zipWithIndex) {
+      nextVars(i) = Wire(UInt(varWidth.W))
+    }
+    for (((_, varExpr), i) <- vars.zipWithIndex) {
+      nextVars(i) := genBits(varExpr, NEXT_TICK)
+    }
+
     // BRAM reads
     for ((cb, reads) <- chiselBrams.zip(bramReads)) {
       cb.io.a_wr := false.B
@@ -590,6 +643,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val simVectorRegsWasWritten = (0 until vectorRegs.length).map(_ => false).toArray
     val simBramsWasWritten = (0 until brams.length).map(_ => false).toArray
     val simBramsWasRead = new Array[BigInt](brams.length)
+    val simVarsCache = new Array[BigInt](vars.length)
     var emitOccurred = false
 
     for ((r, i) <- regs.zipWithIndex) {
@@ -642,6 +696,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         case v: VectorRegSelect => simVectorRegsRead(v.arg.stateId)(genSimBits(v.idx).toInt)
         case m: StreamMux => if (genSimBool(m.cond)) genSimBits(m.t) else genSimBits(m.f)
         case b: StreamBool => genSimBool(b) // treat the bool as regular bits
+        case v: StreamVar => {
+          if (simVarsCache(v.stateId) == null) {
+            simVarsCache(v.stateId) = genSimBits(vars(v.stateId)._2) & ((BigInt(1) << vars(v.stateId)._1) - 1)
+          }
+          simVarsCache(v.stateId)
+        }
         case _ => throw new StreamException("unexpected type in genSimBits: " + b.getClass.toString)
       }
     }
@@ -732,6 +792,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           simBramsWasWritten(i) = false
           simBramsWasRead(i) = null
         }
+        for (i <- 0 until simVarsCache.length) {
+          simVarsCache(i) = null
+        }
         emitOccurred = false
       } while (!simSwhileDone)
     }
@@ -810,6 +873,25 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
     }
 
+    val varGenerated = new Array[Boolean](vars.length)
+    def generateContainedVars(cw: CWriter, b: StreamBits): Unit = {
+      b match {
+        case v: StreamVar => generateVar(cw, v.stateId)
+        case _ =>
+          b.productIterator.foreach {
+            case s: StreamBits => generateContainedVars(cw, s)
+            case _ =>
+          }
+      }
+    }
+    def generateVar(cw: CWriter, varId: Int): Unit = {
+      if (!varGenerated(varId)) {
+        generateContainedVars(cw, vars(varId)._2)
+        cw.writeLine(s"uint${getCWidthForBitWidth(vars(varId)._1)}_t var_${varId} = ${genCBits(vars(varId)._2)};")
+        varGenerated(varId) = true
+      }
+    }
+
     val cw = new CWriter(outputFile)
     val cInputWidth = getCWidthForBitWidth(inputWidth)
     val cOutputWidth = getCWidthForBitWidth(outputWidth)
@@ -834,6 +916,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     cw.writeLine("for (uint32_t i = 0; i <= input_len; i++) {")
     cw.writeLine("uint8_t swhile_done = 0;")
     cw.writeLine("do {")
+    for (i <- 0 until vars.length) {
+      generateVar(cw, i)
+    }
     cw.writeLine(
       s"swhile_done = ${genCBool(swhileConds.foldLeft(true.L.B.asInstanceOf[StreamBool])((b1, b2) => b1 && !b2))};")
     for ((cond, isInSwhile, a) <- assignments) {
