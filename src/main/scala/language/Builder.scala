@@ -162,22 +162,23 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     fullEmits.append((getContextCondition(), inSwhile, emit))
   }
 
-  def addRAMReads(cond: StreamBool, b: StreamBits, reads: Array[ArrayBuffer[(StreamBool, StreamBits)]]): Unit = {
+  def addRAMReads(cond: StreamBool, hasPriority: Boolean, b: StreamBits,
+                  reads: Array[ArrayBuffer[(StreamBool, Boolean, StreamBits)]]): Unit = {
     b match {
-      case s: BRAMSelect => reads(s.arg.stateId).append((cond, s.idx))
+      case s: BRAMSelect => reads(s.arg.stateId).append((cond, hasPriority, s.idx))
       case _ =>
     }
     b match {
       case m: StreamMux => {
-        addRAMReads(cond, m.cond, reads)
-        addRAMReads(cond && m.cond, m.t, reads)
-        addRAMReads(cond && !m.cond, m.f, reads)
+        addRAMReads(cond, hasPriority, m.cond, reads)
+        addRAMReads(cond && m.cond, hasPriority, m.t, reads)
+        addRAMReads(cond && !m.cond, hasPriority, m.f, reads)
       }
-      case v: StreamVar => addRAMReads(cond, vars(v.stateId)._2, reads) // when computing RAM dependencies, we always
-      // want to assume that vars are inlined
+      case v: StreamVar => addRAMReads(cond, hasPriority, vars(v.stateId)._2, reads) // when computing RAM dependencies,
+      // we always want to assume that vars are inlined
       case _ =>
         b.productIterator.foreach {
-          case s: StreamBits => addRAMReads(cond, s, reads)
+          case s: StreamBits => addRAMReads(cond, hasPriority, s, reads)
           case _ =>
         }
     }
@@ -394,12 +395,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         chiselVectorRegs.append(Reg(Vec(r.numEls, UInt(r.width.W))))
       }
     }
-    val bramReads = new Array[ArrayBuffer[(StreamBool, StreamBits)]](brams.length) // cond, addr
+    val bramReads = new Array[ArrayBuffer[(StreamBool, Boolean, StreamBits)]](brams.length) // cond, has priority, addr
     val bramWrites = new Array[ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]](brams.length) // cond,
     // is in swhile, addr, data
     for ((b, i) <- brams.zipWithIndex) {
       chiselBrams.append(Module(new DualPortBRAM(b.width, util.log2Ceil(b.numEls))))
-      bramReads(i) = new ArrayBuffer[(StreamBool, StreamBits)]
+      bramReads(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits)]
       bramWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]
     }
     // separate loop for initialization because one chiselVar may depend on another
@@ -423,19 +424,19 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     for (i <- 0 until depTable.length) {
       depTable(i) = (new mutable.HashSet[Int], new mutable.HashSet[StreamBits], false)
     }
-    for ((cond, _, a) <- assignments) {
+    for ((cond, isInSwhile, a) <- assignments) {
       val condReads = collectAllReads(cond, new mutable.HashSet[Int])
-      addRAMReads(cond, a.rhs, bramReads)
+      addRAMReads(cond, isInSwhile, a.rhs, bramReads)
       addDependencies(a.rhs, condReads, depTable)
-      addRAMReads(cond, assignIdxOr0(a.lhs), bramReads)
+      addRAMReads(cond, isInSwhile, assignIdxOr0(a.lhs), bramReads)
       addDependencies(assignIdxOr0(a.lhs), condReads, depTable)
     }
-    for ((cond, _, e) <- emits) {
-      addRAMReads(cond, e.data, bramReads)
+    for ((cond, isInSwhile, e) <- emits) {
+      addRAMReads(cond, isInSwhile, e.data, bramReads)
       addDependencies(e.data, collectAllReads(cond, new mutable.HashSet[Int]), depTable)
     }
     for ((cond, c0) <- conds) {
-      addRAMReads(cond, c0, bramReads)
+      addRAMReads(cond, true, c0, bramReads)
       addDependencies(c0, collectAllReads(cond, new mutable.HashSet[Int]), depTable)
     }
     val readDepths = determineReadDepths(depTable)
@@ -548,9 +549,29 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamReadAtDepth1 flags below)
         // where we need to use signals based on the incoming input and incoming register values rather than the
         // registered input and current register values.
-        var addr = genBits(reads(0)._2, NEXT_TICK)
-        for ((cond, d) <- reads.drop(1)) {
-          addr = Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+        var addr: UInt = null
+        // Priority is given to reads coming from within an swhile as well as all condition reads. This ensures that
+        // assign/emit reads that occur on the post-while tick and have true conditions during the swhile do not
+        // conflict with swhile reads. Our semantics are thus that all condition reads that themselves have true
+        // conditions execute on each tick, and assign/emit reads occur in while/post-while order. This can still
+        // lead to some nonintuitive conflict cases across conditions and assigns/emits, like the following:
+        // if (a[x]) { # no post-while statements in this block
+        //   while (...)
+        // }
+        // if (...) {
+        //   z := a[y] + 1 # a[x] conflicts with a[y] even though they never need to occur on the same tick
+        // }
+        for ((cond, hasPriority, d) <- reads) {
+          if (!hasPriority) {
+            addr = if (addr == null) genBits(d, NEXT_TICK)
+              else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+          }
+        }
+        for ((cond, hasPriority, d) <- reads) {
+          if (hasPriority) {
+            addr = if (addr == null) genBits(d, NEXT_TICK)
+              else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+          }
         }
         cb.io.a_addr := addr
       }
@@ -602,6 +623,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     // TODO not having the muxes in genBits/genBool for the NEXT_TICK could save logic
     // here if RAM reads only occur under one condition, in which case the condition is not already
     // computed with the muxes to select the correct address for the pipelined read
+    // TODO these rules assume that assign/emit RAM reads in the post-while tick for the next token occur immediately
+    // on the next tick
     for ((c, _, a) <- assignments) {
       val maxC = maximalNonRamReadingCond(c)
       for (r <- getDepth1Reads(assignIdxOr0(a.lhs)).union(getDepth1Reads(a.rhs))) {
@@ -743,7 +766,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       do {
         simSwhileDone = fullSwhileConds.map(c => !evalFullCond(c)).foldLeft(true)((b1, b2) => b1 && b2)
         for ((cond, isInSwhile, a) <- fullAssignments) {
-          if ((simSwhileDone || isInSwhile) && evalFullCond(cond)) {
+          if (evalFullCond(cond) && (simSwhileDone || isInSwhile)) { // semantics require us to always evaluate
+            // the condition, even if we already know we won't be executing the assignment because it's post-while
             a.lhs match {
               case r: StreamReg => {
                 simRegsWrite(r.stateId) = truncate(genSimBits(a.rhs), regs(r.stateId).width)
@@ -767,7 +791,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           }
         }
         for ((cond, isInSwhile, e) <- fullEmits) {
-          if ((simSwhileDone || isInSwhile) && evalFullCond(cond)) {
+          if (evalFullCond(cond) && (simSwhileDone || isInSwhile)) {
             require(!emitOccurred)
             emitOccurred = true
             output = (truncate(genSimBits(e.data), outputWidth) << numOutputBits) | output
