@@ -257,6 +257,7 @@ object Launcher {
             println("random seed: " + seed)
             val input = IntegerCoder.genRandomWords(32, 4, seed)
             val output = IntegerCoder.runCoder(input._1, input._2, 32, 4)
+            Builder.curBuilder.genCSim(new File("integer_coder.c"))
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
         }

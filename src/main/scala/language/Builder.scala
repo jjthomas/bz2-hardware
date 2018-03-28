@@ -100,7 +100,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerAssignable(assignable: Any): Int = {
-    require(context.isEmpty, "assignable cannot be declared inside a conditional")
     assignable match {
       case s: StreamReg => {
         regs.append(s)
