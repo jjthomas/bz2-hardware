@@ -545,7 +545,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
 
     // BRAM reads
-    for ((cb, reads) <- chiselBrams.zip(bramReads)) {
+    for (((cb, reads), i) <- chiselBrams.zip(bramReads).zipWithIndex) {
       cb.io.a_wr := false.B
       if (reads.length > 0) {
         // If the current tick is being flushed, we send its results into the RAM read ports
@@ -556,27 +556,31 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         // where we need to use signals based on the incoming input and incoming register values rather than the
         // registered input and current register values.
         var addr: UInt = null
-        // Priority is given to reads coming from within an swhile as well as all condition reads. This ensures that
-        // assign/emit reads that occur on the post-while tick and have true conditions during the swhile do not
-        // conflict with swhile reads. Our semantics are thus that all condition reads that themselves have true
-        // conditions execute on each tick, and assign/emit reads occur in while/post-while order. This can still
-        // lead to some nonintuitive conflict cases across conditions and assigns/emits, like the following:
-        // if (a[x]) { # no post-while statements in this block
-        //   while (...)
-        // }
-        // if (...) {
-        //   z := a[y] + 1 # a[x] conflicts with a[y] even though they never need to occur on the same tick
-        // }
-        for ((cond, hasPriority, d) <- reads) {
-          if (!hasPriority) {
-            addr = if (addr == null) genBits(d, NEXT_TICK)
-              else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+        if (depTable(i)._2.size == 1) {
+          addr = genBits(depTable(i)._2.toSeq(0), NEXT_TICK)
+        } else {
+          // Priority is given to reads coming from within an swhile as well as all condition reads. This ensures that
+          // assign/emit reads that occur on the post-while tick and have true conditions during the swhile do not
+          // conflict with swhile reads. Our semantics are thus that all condition reads that themselves have true
+          // conditions execute on each tick, and assign/emit reads occur in while/post-while order. This can still
+          // lead to some nonintuitive conflict cases across conditions and assigns/emits, like the following:
+          // if (a[x]) { # no post-while statements in this block
+          //   while (...)
+          // }
+          // if (...) {
+          //   z := a[y] + 1 # a[x] conflicts with a[y] even though they never need to occur on the same tick
+          // }
+          for ((cond, hasPriority, d) <- reads) {
+            if (!hasPriority) {
+              addr = if (addr == null) genBits(d, NEXT_TICK)
+                else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+            }
           }
-        }
-        for ((cond, hasPriority, d) <- reads) {
-          if (hasPriority) {
-            addr = if (addr == null) genBits(d, NEXT_TICK)
-              else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+          for ((cond, hasPriority, d) <- reads) {
+            if (hasPriority) {
+              addr = if (addr == null) genBits(d, NEXT_TICK)
+                else Mux(genBool(cond, NEXT_TICK), genBits(d, NEXT_TICK), addr)
+            }
           }
         }
         cb.io.a_addr := addr
