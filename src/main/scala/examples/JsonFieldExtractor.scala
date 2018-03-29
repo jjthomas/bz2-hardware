@@ -128,29 +128,29 @@ object JsonFieldExtractor {
 
     val stateBits = util.log2Ceil(maxMatchId + 1)
 
-    val inStringValue = StreamReg(1, false)
-    val lastChar = StreamReg(8, ' '.toInt)
-    val nestDepth = StreamReg(util.log2Ceil(maxNestDepth + 1), 0)
-    val parseState = StreamReg(util.log2Ceil(ParseState.maxId), if (seqTrans == null) CONF_SEQ.id else EXP_VAL.id)
-    val matchState = StreamReg(stateBits, 0)
-    val seqTransRam = if (seqTrans == null) StreamBRAM(stateBits + 8, maxMatchId) else null
-    val seqTransVec = if (seqTrans == null) null else StreamVectorReg(stateBits + 8, seqTrans.length, seqTrans)
+    val inStringValue = NewStreamReg(1, false)
+    val lastChar = NewStreamReg(8, ' '.toInt)
+    val nestDepth = NewStreamReg(util.log2Ceil(maxNestDepth + 1), 0)
+    val parseState = NewStreamReg(util.log2Ceil(ParseState.maxId), if (seqTrans == null) CONF_SEQ.id else EXP_VAL.id)
+    val matchState = NewStreamReg(stateBits, 0)
+    val seqTransRam = if (seqTrans == null) NewStreamBRAM(stateBits + 8, maxMatchId) else null
+    val seqTransVec = if (seqTrans == null) null else NewStreamVectorReg(stateBits + 8, seqTrans.length, seqTrans)
     val splitTransVec =
       if (seqTrans == null) {
-        StreamVectorReg(2 * stateBits + 8, maxFields,
+        NewStreamVectorReg(2 * stateBits + 8, maxFields,
           (0 until maxFields).map(_ => (BigInt(1) << (2 * stateBits + 8)) - 1))
       } else {
-        if (splitTrans.length == 0) null else StreamVectorReg(2 * stateBits + 8, splitTrans.length, splitTrans)
+        if (splitTrans.length == 0) null else NewStreamVectorReg(2 * stateBits + 8, splitTrans.length, splitTrans)
       }
-    val stateStack = (0 until maxNestDepth).map(i => StreamReg(stateBits, null))
+    val stateStack = (0 until maxNestDepth).map(i => NewStreamReg(stateBits, null))
     val matchStrChars = ((stateBits + 8) + 8 - 1) / 8
-    val matchStrEmitCounter = StreamReg(util.log2Ceil(matchStrChars), 0)
+    val matchStrEmitCounter = NewStreamReg(util.log2Ceil(matchStrChars), 0)
 
     if (seqTrans == null) {
       val numWordsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8
-      val configToken = StreamReg(numWordsForConfigToken * 8, null)
-      val configWordNum = StreamReg(util.log2Ceil(numWordsForConfigToken), 0)
-      val configTokenNum = StreamReg(util.log2Ceil(maxMatchId), 0)
+      val configToken = NewStreamReg(numWordsForConfigToken * 8, null)
+      val configWordNum = NewStreamReg(util.log2Ceil(numWordsForConfigToken), 0)
+      val configTokenNum = NewStreamReg(util.log2Ceil(maxMatchId), 0)
       onInput {
         swhen(parseState === CONF_SEQ.id.L || parseState === CONF_SPLIT.id.L) {
           swhen(configWordNum === (numWordsForConfigToken - 1).L) {

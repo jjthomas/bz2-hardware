@@ -133,31 +133,31 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
   assert(wordSize % 8 == 0)
   assert(wordSize <= 64)
   val wordBytes = wordSize / 8
-  val wordIdx = StreamReg(util.log2Ceil(batchWords + 1), 0)
-  val byteIdx = StreamReg(Math.max(util.log2Ceil(wordBytes), 1), 0)
-  val curWord = StreamReg(wordSize, 0)
+  val wordIdx = NewStreamReg(util.log2Ceil(batchWords + 1), 0)
+  val byteIdx = NewStreamReg(Math.max(util.log2Ceil(wordBytes), 1), 0)
+  val curWord = NewStreamReg(wordSize, 0)
 
   val maxVarIntBits = (wordSize + 7 - 1) / 7 * 8
   val bitWidths = Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, if (wordSize <= 32) 12 else 64, 13, 16, 20, 32)
   assert(util.isPow2(bitWidths.length))
   val maxWidth = bitWidths.max
-  val idToBitWidth = StreamVectorReg(util.log2Ceil(maxWidth + 1), bitWidths.length, bitWidths.map(b => BigInt(b)))
-  val bitCounts = bitWidths.map(_ => (StreamReg(util.log2Ceil(batchWords + 1), 0) /* number of words that fit */,
-    StreamReg(util.log2Ceil(wordSize + 1), 0) /* max bitcount in exceptions */,
-    StreamReg(util.log2Ceil(maxVarIntBits + 1), 0) /* number of bits needed for varint encoding of
+  val idToBitWidth = NewStreamVectorReg(util.log2Ceil(maxWidth + 1), bitWidths.length, bitWidths.map(b => BigInt(b)))
+  val bitCounts = bitWidths.map(_ => (NewStreamReg(util.log2Ceil(batchWords + 1), 0) /* number of words that fit */,
+    NewStreamReg(util.log2Ceil(wordSize + 1), 0) /* max bitcount in exceptions */,
+    NewStreamReg(util.log2Ceil(maxVarIntBits + 1), 0) /* number of bits needed for varint encoding of
     exceptions */))
-  val lzToVarIntBits = StreamVectorReg(util.log2Ceil(maxVarIntBits + 1), wordSize,
+  val lzToVarIntBits = NewStreamVectorReg(util.log2Ceil(maxVarIntBits + 1), wordSize,
     (0 until wordSize).map(lz => BigInt(((wordSize - lz) + 7 - 1) / 7 * 8)))
   object CodingState extends Enumeration {
     type CodingState = Value
     val READ_INPUT, EMIT_MAIN, EMIT_EXCEPT = Value
   }
   import CodingState._
-  val curState = StreamReg(util.log2Ceil(CodingState.maxId), READ_INPUT.id)
+  val curState = NewStreamReg(util.log2Ceil(CodingState.maxId), READ_INPUT.id)
 
-  val outputWord = StreamReg(8, 0)
-  val outputWordBits = StreamReg(3, 0)
-  val wordSlice = StreamReg(util.log2Ceil(maxVarIntBits / 8), 0) // used when slicing word into chunks of 8 or 7
+  val outputWord = NewStreamReg(8, 0)
+  val outputWordBits = NewStreamReg(3, 0)
+  val wordSlice = NewStreamReg(util.log2Ceil(maxVarIntBits / 8), 0) // used when slicing word into chunks of 8 or 7
 
   object EmitMainState extends Enumeration {
     type EmitMainState = Value
@@ -169,9 +169,9 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
     val EXCEPT_SIZE, EXCEPT_POS, EXCEPT_VAL = Value
   }
   import EmitExceptState._
-  val emitState = StreamReg(util.log2Ceil(Math.max(EmitMainState.maxId, EmitExceptState.maxId)), BLOCK_SIZE.id)
+  val emitState = NewStreamReg(util.log2Ceil(Math.max(EmitMainState.maxId, EmitExceptState.maxId)), BLOCK_SIZE.id)
 
-  val buffer = StreamBRAM(wordSize, batchWords)
+  val buffer = NewStreamBRAM(wordSize, batchWords)
 
   def leadingZeros(word: StreamBits): StreamBits = { // maximum return value is wordSize - 1
     assert(word.getWidth >= 4 && util.isPow2(word.getWidth))

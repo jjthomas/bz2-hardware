@@ -55,35 +55,41 @@ sealed abstract class AssignableStreamData(width: Int) extends StreamBits(width)
   def :=(rhs: StreamBits) = Assign(this, rhs)
 }
 
-case class StreamVar(init: StreamBits = null, private val width: Int = 0)
-  extends AssignableStreamData(if (init == null) width else init.getWidth) {
-  val stateId = Builder.curBuilder.registerAssignable(this)
+object NewStreamVar {
+  def apply(init: StreamBits = null, width: Int = 0): StreamVar = {
+    Builder.curBuilder.registerVar(init, width)
+  }
 }
+case class StreamVar(init: StreamBits, private val width: Int, stateId: Int)
+  extends AssignableStreamData(if (init == null) width else init.getWidth)
 
-case class StreamReg(width: Int, init: BigInt) extends AssignableStreamData(width) {
-  val stateId = Builder.curBuilder.registerAssignable(this)
+object NewStreamReg {
+  def apply(width: Int, init: BigInt): StreamReg = {
+    Builder.curBuilder.registerReg(width, init)
+  }
 }
+case class StreamReg(width: Int, init: BigInt, stateId: Int) extends AssignableStreamData(width)
 
-case class StreamBRAM(width: Int, numEls: Int) {
-  val stateId = Builder.curBuilder.registerAssignable(this)
-
+object NewStreamBRAM {
+  def apply(width: Int, numEls: Int): StreamBRAM = {
+    Builder.curBuilder.registerBram(width, numEls)
+  }
+}
+case class StreamBRAM(width: Int, numEls: Int, stateId: Int) {
   def apply(idx: StreamBits) = BRAMSelect(this, idx)
 }
 
 case class BRAMSelect(arg: StreamBRAM, idx: StreamBits) extends AssignableStreamData(arg.width)
 
-case class StreamVectorReg(width: Int, numEls: Int, init: Seq[BigInt]) {
+object NewStreamVectorReg {
+  def apply(width: Int, numEls: Int, init: Seq[BigInt]): StreamVectorReg = {
+    Builder.curBuilder.registerVectorReg(width, numEls, init)
+  }
+}
+case class StreamVectorReg(width: Int, numEls: Int, init: Seq[BigInt], stateId: Int) {
   require(init == null || init.size == numEls, "init must be null or have size equal to numEls")
-  val stateId = Builder.curBuilder.registerAssignable(this)
 
   def apply(idx: StreamBits) = VectorRegSelect(this, idx)
 }
 
-case class StreamVectorWire(width: Int, numEls: Int) {
-  val stateId = Builder.curBuilder.registerAssignable(this)
-
-  def apply(idx: StreamBits) = VectorWireSelect(this, idx)
-}
-
 case class VectorRegSelect(arg: StreamVectorReg, idx: StreamBits) extends AssignableStreamData(arg.width)
-case class VectorWireSelect(arg: StreamVectorWire, idx: StreamBits) extends AssignableStreamData(arg.width)

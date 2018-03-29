@@ -99,27 +99,28 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     context.remove(context.length - 1)
   }
 
-  def registerAssignable(assignable: Any): Int = {
-    assignable match {
-      case s: StreamReg => {
-        regs.append(s)
-        regs.length - 1
-      }
-      case b: StreamBRAM => {
-        brams.append(b)
-        brams.length - 1
-      }
-      case v: StreamVectorReg => {
-        vectorRegs.append(v)
-        vectorRegs.length - 1
-      }
-      case v: StreamVar => {
-        vars.append((v.getWidth, v.init))
-        vars.length - 1
-      }
-      case _ => throw new StreamException("registers, vector registers, BRAMs, and vars are the only supported " +
-        "assignables for now")
-    }
+  def registerVar(init: StreamBits, width: Int): StreamVar = {
+    val newVar = StreamVar(init, width, vars.length)
+    vars.append((newVar.getWidth, newVar.init))
+    newVar
+  }
+
+  def registerReg(width: Int, init: BigInt): StreamReg = {
+    val newReg = StreamReg(width, init, regs.length)
+    regs.append(newReg)
+    newReg
+  }
+
+  def registerBram(width: Int, numEls: Int): StreamBRAM = {
+    val newBram = StreamBRAM(width, numEls, brams.length)
+    brams.append(newBram)
+    newBram
+  }
+
+  def registerVectorReg(width: Int, numEls: Int, init: Seq[BigInt]): StreamVectorReg = {
+    val newVectorReg = StreamVectorReg(width, numEls, init, vectorRegs.length)
+    vectorRegs.append(newVectorReg)
+    newVectorReg
   }
 
   def collapseContext(ctx: Seq[StreamBool]): StreamBool = {

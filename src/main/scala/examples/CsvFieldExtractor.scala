@@ -4,9 +4,9 @@ import chisel3.util
 import language._
 
 class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends ProcessingUnit(8, coreId) {
-  val curField = StreamReg(util.log2Ceil(numFields), 0)
-  val inQuote = StreamReg(1, false)
-  val lastChar = StreamReg(8, ' '.toInt)
+  val curField = NewStreamReg(util.log2Ceil(numFields), 0)
+  val inQuote = NewStreamReg(1, false)
+  val lastChar = NewStreamReg(8, ' '.toInt)
 
   onInput {
     swhen(StreamInput === '"'.toInt.L) {
