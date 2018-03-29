@@ -884,9 +884,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           for (j <- 0 until numEls by vectorElsPerLine) {
             var line = ""
             for (k <- j until Math.min(j + vectorElsPerLine, numEls)) {
-              val nextEl = if (init != null) cStringForValue(init(j + k))
+              val nextEl = if (init != null) cStringForValue(init(k))
                 else cStringForValue(getCRandForBitWidth(width))
-              line += s"${if (k == 0) "" else " "}$nextEl,"
+              line += s"${if (k == j) "" else " "}$nextEl,"
             }
             cw.writeLine(line)
           }
