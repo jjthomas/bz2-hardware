@@ -60,8 +60,7 @@ object NewStreamVar {
     Builder.curBuilder.registerVar(init, width)
   }
 }
-case class StreamVar(init: StreamBits, private val width: Int, stateId: Int)
-  extends AssignableStreamData(if (init == null) width else init.getWidth)
+case class StreamVar(width: Int, stateId: Int) extends AssignableStreamData(width)
 
 object NewStreamReg {
   def apply(width: Int, init: BigInt): StreamReg = {

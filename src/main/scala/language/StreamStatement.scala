@@ -1,9 +1,15 @@
 package language
 
-case class Assign(lhs: AssignableStreamData, rhs: StreamBits) {
-  Builder.curBuilder.registerAssignment(this)
+object Assign {
+  def apply(lhs: AssignableStreamData, rhs: StreamBits): Unit = {
+    Builder.curBuilder.registerAssignment(AssignData(lhs, rhs))
+  }
 }
+case class AssignData(lhs: AssignableStreamData, rhs: StreamBits)
 
-case class Emit(data: StreamBits) {
-  Builder.curBuilder.registerEmit(this)
+object Emit {
+  def apply(data: StreamBits): Unit = {
+    Builder.curBuilder.registerEmit(EmitData(data))
+  }
 }
+case class EmitData(data: StreamBits)

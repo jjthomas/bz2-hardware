@@ -32,9 +32,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val brams = new ArrayBuffer[StreamBRAM]
   val vars = new ArrayBuffer[(Int, StreamBits)]
 
-  val fullAssignments = new ArrayBuffer[(Seq[StreamBool], Boolean, Assign)]
+  val fullAssignments = new ArrayBuffer[(Seq[StreamBool], Boolean, AssignData)]
   lazy val assignments = fullAssignments.map(t => (collapseContext(t._1), t._2, t._3))
-  val fullEmits = new ArrayBuffer[(Seq[StreamBool], Boolean, Emit)]
+  val fullEmits = new ArrayBuffer[(Seq[StreamBool], Boolean, EmitData)]
   lazy val emits = fullEmits.map(t => (collapseContext(t._1), t._2, t._3))
   val fullConds = new ArrayBuffer[(Seq[StreamBool], StreamBool)]
   lazy val conds = fullConds.map(t => (collapseContext(t._1), t._2))
@@ -100,8 +100,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerVar(init: StreamBits, width: Int): StreamVar = {
-    val newVar = StreamVar(init, width, vars.length)
-    vars.append((newVar.getWidth, newVar.init))
+    val newVar = StreamVar(if (init == null) width else init.getWidth, vars.length)
+    vars.append((newVar.getWidth, init))
     newVar
   }
 
@@ -141,7 +141,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
   }
 
-  def registerAssignment(assignment: Assign): Unit = {
+  def registerAssignment(assignment: AssignData): Unit = {
     require(inInputContext, "statements must be in an onInput or onFinished block")
     assignment.lhs match {
       // TODO var that is defined outside of swhile and set both inside and outside swhile is undefined, we should
@@ -157,7 +157,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
   }
 
-  def registerEmit(emit: Emit): Unit = {
+  def registerEmit(emit: EmitData): Unit = {
     require(inInputContext, "statements must be in an onInput or onFinished block")
     fullEmits.append((getContextCondition(), inSwhile, emit))
   }
