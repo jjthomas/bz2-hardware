@@ -209,6 +209,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val bramsRead = new mutable.HashSet[Int]
     b match {
       case v: StreamVar => bramsRead ++= addDependencies(vars(v.stateId)._2, deps, table)
+      case m: StreamMux => {
+        bramsRead ++= addDependencies(m.cond, deps, table)
+        val expandedDeps = deps ++ collectAllReads(m.cond, new mutable.HashSet[Int])
+        bramsRead ++= addDependencies(m.t, expandedDeps, table)
+        bramsRead ++= addDependencies(m.f, expandedDeps, table)
+      }
       case _ =>
         b.productIterator.foreach {
           case sb: StreamBits => bramsRead ++= addDependencies(sb, deps, table)
