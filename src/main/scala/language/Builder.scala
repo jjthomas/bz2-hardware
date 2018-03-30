@@ -100,7 +100,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerVar(init: StreamBits, width: Int): StreamVar = {
-    val newVar = StreamVar(if (init == null) width else init.getWidth, vars.length)
+    val newVar = StreamVar(if (width == 0) init.getWidth else width, vars.length)
     vars.append((newVar.getWidth, init))
     newVar
   }
@@ -368,7 +368,113 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
   }
 
+  def cseUpdateCounts(exprCounts: mutable.Map[StreamBits, Int], expr: StreamBits): Unit = {
+    val curCount = exprCounts.getOrElse(expr, 0)
+    if (curCount == 0) {
+      var hasSubExpr = false
+      expr.productIterator.foreach { // only recurse when we haven't seen this expr before
+        case subExpr: StreamBits => {
+          cseUpdateCounts(exprCounts, subExpr)
+          hasSubExpr = true
+        }
+        case _ =>
+      }
+      if (hasSubExpr && !expr.isInstanceOf[AssignableStreamData]) { // don't want to CSE simple exprs or LHS exprs
+        exprCounts.put(expr, 1)
+      }
+    } else if (curCount == 1) {
+      exprCounts.put(expr, 2)
+    }
+  }
+
+  def cseReplaceHelper(exprVars: mutable.Map[StreamBits, StreamVar], expr: StreamBits,
+                       replaceTop: Boolean): (StreamBits, Boolean) = {
+    val exprVar = exprVars.get(expr)
+    if (exprVar.isEmpty || !replaceTop) {
+      var exprChanged = false
+      val newChildren = expr.productIterator.map {
+        case subExpr: StreamBits => {
+          val (newExpr, updated) = cseReplaceHelper(exprVars, subExpr, true)
+          exprChanged |= updated
+          newExpr
+        }
+        case other => other
+      }
+      (if (exprChanged) expr.withArguments(newChildren.toSeq.asInstanceOf[Seq[AnyRef]]) else expr, exprChanged)
+    } else {
+      (exprVar.get, true)
+    }
+  }
+
+  def cseReplace(exprVars: mutable.Map[StreamBits, StreamVar], expr: StreamBits): StreamBits = {
+    cseReplaceHelper(exprVars, expr, true)._1
+  }
+
+  def cseReplaceSubExprs(exprVars: mutable.Map[StreamBits, StreamVar], expr: StreamBits): StreamBits = {
+    cseReplaceHelper(exprVars, expr, false)._1
+  }
+
+  def commonSubexprElim(): Unit = {
+    val exprCounts = new mutable.HashMap[StreamBits, Int]
+    for ((_, v) <- vars) {
+      cseUpdateCounts(exprCounts, v)
+    }
+    for ((_, _, a) <- fullAssignments) {
+      cseUpdateCounts(exprCounts, a.lhs)
+      cseUpdateCounts(exprCounts, a.rhs)
+    }
+    for ((_, _, e) <- fullEmits) {
+      cseUpdateCounts(exprCounts, e.data)
+    }
+    for ((_, c) <- fullConds) {
+      cseUpdateCounts(exprCounts, c)
+    }
+
+    val originalNumVars = vars.length
+    val exprVars = new mutable.HashMap[StreamBits, StreamVar]
+    for ((expr, count) <- exprCounts) {
+      if (count == 2) {
+        exprVars.put(expr, NewStreamVar(expr))
+      }
+    }
+
+    for (i <- 0 until originalNumVars) {
+      val cur = vars(i)
+      vars(i) = cur.copy(_2 = cseReplace(exprVars, cur._2))
+    }
+    for (i <- originalNumVars until vars.length) {
+      val cur = vars(i)
+      vars(i) = cur.copy(_2 = cseReplaceSubExprs(exprVars, cur._2))
+    }
+    for (i <- 0 until fullAssignments.length) {
+      val cur = fullAssignments(i)
+      fullAssignments(i) = cur.copy(
+        _1 = cur._1.map(b => cseReplace(exprVars, b).B),
+        _3 = AssignData(cseReplace(exprVars, cur._3.lhs).asInstanceOf[AssignableStreamData],
+          cseReplace(exprVars, cur._3.rhs))
+      )
+    }
+    for (i <- 0 until fullEmits.length) {
+      val cur = fullEmits(i)
+      fullEmits(i) = cur.copy(
+        _1 = cur._1.map(b => cseReplace(exprVars, b).B),
+        _3 = EmitData(cseReplace(exprVars, cur._3.data))
+      )
+    }
+    for (i <- 0 until fullConds.length) {
+      val cur = fullConds(i)
+      fullConds(i) = cur.copy(
+        _1 = cur._1.map(b => cseReplace(exprVars, b).B),
+        _2 = cseReplace(exprVars, cur._2).B
+      )
+    }
+    for (i <- 0 until fullSwhileConds.length) {
+      fullSwhileConds(i) = fullSwhileConds(i).map(b => cseReplace(exprVars, b).B)
+    }
+  }
+
   def compile(): Unit = {
+    commonSubexprElim()
     val regWrites = new Array[ArrayBuffer[(StreamBool, Boolean, StreamBits)]](regs.length) // cond, is in swhile, data
     for ((r, i) <- regs.zipWithIndex) {
       if (r.init != null) {

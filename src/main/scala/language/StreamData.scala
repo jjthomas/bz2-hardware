@@ -13,6 +13,11 @@ sealed abstract class StreamBits(width: Int) extends Product {
   def >=(other: StreamBits) = GreaterThanEqual(this, other)
   def ##(other: StreamBits) = Concat(this, other)
   def B = BoolCast(this)
+
+  def withArguments(args: Seq[AnyRef]): this.type = {
+    val cons = this.getClass.getConstructors.find(_.getParameterTypes.length == productArity)
+    cons.get.newInstance(args: _*).asInstanceOf[this.type]
+  }
 }
 
 case class Add(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth) + 1)
