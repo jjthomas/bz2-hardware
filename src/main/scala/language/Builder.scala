@@ -399,10 +399,10 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           newExpr
         }
         case other => other
-      }
-      (if (exprChanged) expr.withArguments(newChildren.toSeq.asInstanceOf[Seq[AnyRef]]) else expr, exprChanged)
+      }.toList.asInstanceOf[List[AnyRef]]
+      (if (exprChanged) expr.withArguments(newChildren) else expr, exprChanged)
     } else {
-      (exprVar.get, true)
+      (if (expr.isInstanceOf[StreamBool]) exprVar.get.B else exprVar.get, true)
     }
   }
 
@@ -444,7 +444,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     for (i <- originalNumVars until vars.length) {
       val cur = vars(i)
-      vars(i) = cur.copy(_2 = cseReplaceSubExprs(exprVars, cur._2))
+      vars(i) = cur.copy(_2 = cseReplaceSubExprs(exprVars, cur._2)) // only replace subexprs to avoid replacing
+      // with self
     }
     for (i <- 0 until fullAssignments.length) {
       val cur = fullAssignments(i)
