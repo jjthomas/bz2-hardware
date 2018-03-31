@@ -7,7 +7,8 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
 object IntegerCoder {
-  def runCoder(numInputBits: Int, input: BigInt, wordSize: Int, batchWords: Int): (Int, BigInt) = {
+  def runCoder(numInputBits: Int, input: BigInt, wordSize: Int, batchWords: Int, bitWidths: Array[Int]):
+    (Int, BigInt) = {
     assert(numInputBits % (wordSize * batchWords) == 0)
     var output: BigInt = 0
     var numOutputBits = 0
@@ -49,7 +50,6 @@ object IntegerCoder {
       width * bitCount(0) + exceptionCost(bitCount)._2
     }
 
-    val bitWidths = Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, if (wordSize <= 32) 12 else 64, 13, 16, 20, 32)
     val bitCounts = (0 until bitWidths.length).map(_ => Array(0, 0, 0)).toArray
     var wordsConsumed = 0
     val buffer = (0 until batchWords).map(_ => 0).toArray
@@ -74,7 +74,7 @@ object IntegerCoder {
             minWidthIdx = j
           }
         }
-        addToOutput(minWidthIdx, util.log2Ceil(bitWidths.length))
+        addToOutput(minWidthIdx, math.max(util.log2Ceil(bitWidths.length), 1))
         addToOutput(batchWords - bitCounts(minWidthIdx)(0), util.log2Ceil(batchWords + 1))
         for (j <- 0 until batchWords) {
           if (bitLength(buffer(j)) <= bitWidths(minWidthIdx)) {
@@ -92,7 +92,7 @@ object IntegerCoder {
           }
           for (j <- 0 until batchWords) {
             if (bitLength(buffer(j)) > bitWidths(minWidthIdx)) {
-              addToOutput(j, util.log2Ceil(batchWords))
+              addToOutput(j, math.max(util.log2Ceil(batchWords), 1))
               if (exceptionCost(bitCounts(minWidthIdx))._1) { // fixed
                 addToOutput(buffer(j), bitCounts(minWidthIdx)(1))
               } else {
@@ -129,17 +129,17 @@ object IntegerCoder {
   }
 }
 
-class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends ProcessingUnit(8, coreId) {
+class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId: Int)
+  extends ProcessingUnit(8, coreId) {
   assert(wordSize % 8 == 0)
   assert(wordSize <= 64)
+  assert(util.isPow2(bitWidths.length))
   val wordBytes = wordSize / 8
   val wordIdx = NewStreamReg(util.log2Ceil(batchWords + 1), 0)
   val byteIdx = NewStreamReg(Math.max(util.log2Ceil(wordBytes), 1), 0)
   val curWord = NewStreamReg(wordSize, 0)
 
   val maxVarIntBits = (wordSize + 7 - 1) / 7 * 8
-  val bitWidths = Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, if (wordSize <= 32) 12 else 64, 13, 16, 20, 32)
-  assert(util.isPow2(bitWidths.length))
   val maxWidth = bitWidths.max
   val idToBitWidth = NewStreamVectorReg(util.log2Ceil(maxWidth + 1), bitWidths.length, bitWidths.map(b => BigInt(b)))
   val bitCounts = bitWidths.map(_ => (NewStreamReg(util.log2Ceil(batchWords + 1), 0) /* number of words that fit */,
@@ -228,7 +228,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
     val exceptionFixedCost = util.log2Ceil(wordSize).L /* space for exception size */ +
       mulWithConstMethod(bitCounts(i)._2, numExceptions, batchWords)
     bestWidths.append((mulWithConstMethod(w.L, bitCounts(i)._1, batchWords) /* main size */ +
-      mulByConst(numExceptions, util.log2Ceil(batchWords)) /* exception positions */ +
+      mulByConst(numExceptions, math.max(util.log2Ceil(batchWords), 1)) /* exception positions */ +
       StreamMux(numExceptions > 0.L, 1.L, 0.L) /* var int or fixed */ +
       StreamMux(bitCounts(i)._3 < exceptionFixedCost, bitCounts(i)._3, exceptionFixedCost) /* main exception size */,
       bitCounts(i)._3 < exceptionFixedCost, i.L, numExceptions, bitCounts(i)._2))
@@ -354,7 +354,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
         val outputTopBit =
           StreamMux(curState === EMIT_MAIN.id.L,
             StreamMux(emitState === BLOCK_SIZE.id.L,
-              (util.log2Ceil(bitWidths.length) - 1).L,
+              (math.max(util.log2Ceil(bitWidths.length), 1) - 1).L,
               StreamMux(emitState === NUM_EXCEPTIONS.id.L,
                 (util.log2Ceil(batchWords + 1) - 1).L, // TODO is it possible for there to be 100% exceptions? We can
                 // save a bit if not
@@ -367,7 +367,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, coreId: Int) extends Processi
                 util.log2Ceil(wordSize).L
               ),
               StreamMux(emitState === EXCEPT_POS.id.L,
-                (util.log2Ceil(batchWords) - 1).L,
+                (math.max(util.log2Ceil(batchWords), 1) - 1).L,
                 StreamMux(useVarInt,
                   7.L,
                   fixedTopBit

@@ -251,12 +251,13 @@ object Launcher {
       "StreamingWrapper9" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
           1000000000L), 4, 1, 1, 16, 32, 8, (coreId: Int) =>
-          new IntegerCoder(32, 4, coreId)), backendName) {
+          new IntegerCoder(32, 4, Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 20, 32), coreId)), backendName) {
           (c) => {
             val seed = Random.nextLong()
             println("random seed: " + seed)
             val input = IntegerCoder.genRandomWords(32, 4, seed)
-            val output = IntegerCoder.runCoder(input._1, input._2, 32, 4)
+            val output = IntegerCoder.runCoder(input._1, input._2, 32, 4,
+              Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 20, 32))
             Builder.curBuilder.genCSim(new File("integer_coder.c"))
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
