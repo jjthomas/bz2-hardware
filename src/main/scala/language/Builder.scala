@@ -40,7 +40,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   lazy val conds = fullConds.map(t => (collapseContext(t._1), t._2))
 
   var inSwhile = false
-  var inInputContext = false
   val fullSwhileConds = new ArrayBuffer[Seq[StreamBool]]
   lazy val swhileConds = fullSwhileConds.map(c => collapseContext(c))
 
@@ -78,14 +77,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
 
   def endSwhile(): Unit = {
     inSwhile = false
-  }
-
-  def startInputContext(): Unit = {
-    inInputContext = true
-  }
-
-  def endInputContext(): Unit = {
-    inInputContext = false
   }
 
   def startContext(c: StreamWhenContext): Unit = {
@@ -142,7 +133,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerAssignment(assignment: AssignData): Unit = {
-    require(inInputContext, "statements must be in an onInput or onFinished block")
     assignment.lhs match {
       // TODO var that is defined outside of swhile and set both inside and outside swhile is undefined, we should
       // probably check for this case
@@ -158,7 +148,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   }
 
   def registerEmit(emit: EmitData): Unit = {
-    require(inInputContext, "statements must be in an onInput or onFinished block")
     fullEmits.append((getContextCondition(), inSwhile, emit))
   }
 

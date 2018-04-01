@@ -278,168 +278,168 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
     }
   }
 
-  onInput {
-    val finalInputWord = if (wordSize > 8) StreamInput ## curWord(8 * (wordBytes - 1) - 1, 0) else StreamInput
-    val bufWord = buffer(wordIdx)
-    val curLeadingZeros = leadingZeros(StreamMux(curState === READ_INPUT.id.L, finalInputWord, bufWord))
-    val curBitLen = wordSize.L - curLeadingZeros
-    swhen(curState === READ_INPUT.id.L) {
-      for (i <- 0 until wordBytes - 1) {
-        swhen(byteIdx === i.L) {
-          curWord := (if (i == 0) curWord(8 * wordBytes - 1, 8) ## StreamInput
-          else curWord(8 * wordBytes - 1, 8 * (i + 1)) ## StreamInput ## curWord(8 * i - 1, 0))
-        }
+  val finalInputWord = if (wordSize > 8) StreamInput ## curWord(8 * (wordBytes - 1) - 1, 0) else StreamInput
+  val bufWord = buffer(wordIdx)
+  val curLeadingZeros = leadingZeros(StreamMux(curState === READ_INPUT.id.L, finalInputWord, bufWord))
+  val curBitLen = wordSize.L - curLeadingZeros
+  swhen(curState === READ_INPUT.id.L) {
+    for (i <- 0 until wordBytes - 1) {
+      swhen(byteIdx === i.L) {
+        curWord := (if (i == 0) curWord(8 * wordBytes - 1, 8) ## StreamInput
+        else curWord(8 * wordBytes - 1, 8 * (i + 1)) ## StreamInput ## curWord(8 * i - 1, 0))
       }
-      swhen(byteIdx === (wordBytes - 1).L) {
-        buffer(wordIdx) := finalInputWord
-        byteIdx := 0.L
-        swhen(wordIdx === (batchWords - 1).L) {
-          wordIdx := 0.L
-          curState := EMIT_MAIN.id.L
+    }
+    swhen(byteIdx === (wordBytes - 1).L) {
+      buffer(wordIdx) := finalInputWord
+      byteIdx := 0.L
+      swhen(wordIdx === (batchWords - 1).L) {
+        wordIdx := 0.L
+        curState := EMIT_MAIN.id.L
+      }.otherwise {
+        wordIdx := wordIdx + 1.L
+      }
+      for ((w, i) <- bitWidths.zipWithIndex) {
+        swhen(curBitLen <= w.L) {
+          bitCounts(i)._1 := bitCounts(i)._1 + 1.L
         }.otherwise {
-          wordIdx := wordIdx + 1.L
-        }
-        for ((w, i) <- bitWidths.zipWithIndex) {
-          swhen(curBitLen <= w.L) {
-            bitCounts(i)._1 := bitCounts(i)._1 + 1.L
-          }.otherwise {
-            swhen(curBitLen > bitCounts(i)._2) {
-              bitCounts(i)._2 := curBitLen
-            }
-            bitCounts(i)._3 := bitCounts(i)._3 + lzToVarIntBits(curLeadingZeros)
+          swhen(curBitLen > bitCounts(i)._2) {
+            bitCounts(i)._2 := curBitLen
           }
+          bitCounts(i)._3 := bitCounts(i)._3 + lzToVarIntBits(curLeadingZeros)
         }
       }
-    }.otherwise {
-      swhile(wordIdx < batchWords.L) {
-        var fixedByte: StreamBits = bufWord(7, 0)
-        for (i <- 1 until wordBytes) {
-          fixedByte = StreamMux(wordSlice === i.L, bufWord((i + 1) * 8 - 1, i * 8), fixedByte)
-        }
-        val fixedBitsLeft = StreamMux(emitState === EMIT_MAIN.id.L, bestWidth - wordSlice ## 0.L(3),
-          exceptionWidth - wordSlice ## 0.L(3))
-        val fixedBitsDone = fixedBitsLeft <= 8.L
-        val fixedTopBit = StreamMux(fixedBitsDone, fixedBitsLeft - 1.L, 7.L)
-        var exceptSlice: StreamBits = bufWord(6, 0)
-        for (i <- 1 until maxVarIntBits / 8) {
-          exceptSlice = StreamMux(wordSlice === i.L, bufWord(Math.min(wordSize - 1, (i + 1) * 7 - 1), i * 7),
-            exceptSlice)
-        }
-        val exceptBitsLeft = curBitLen - mulByConst(wordSlice, 7)
-        val exceptBitsDone = exceptBitsLeft <= 7.L
-        val exceptByte = StreamMux(exceptBitsDone, 0.L ## exceptSlice, 1.L ## exceptSlice)
-        val output =
-          StreamMux(curState === EMIT_MAIN.id.L,
-            StreamMux(emitState === BLOCK_SIZE.id.L,
-              bestWidthId,
-              StreamMux(emitState === NUM_EXCEPTIONS.id.L,
-                numExceptions,
+    } .otherwise {
+      byteIdx := byteIdx + 1.L
+    }
+  } .otherwise {
+    swhile(wordIdx < batchWords.L) {
+      var fixedByte: StreamBits = bufWord(7, 0)
+      for (i <- 1 until wordBytes) {
+        fixedByte = StreamMux(wordSlice === i.L, bufWord((i + 1) * 8 - 1, i * 8), fixedByte)
+      }
+      val fixedBitsLeft = StreamMux(curState === EMIT_MAIN.id.L, bestWidth - (wordSlice ## 0.L(3)),
+        exceptionWidth - (wordSlice ## 0.L(3)))
+      val fixedBitsDone = fixedBitsLeft <= 8.L
+      val fixedTopBit = StreamMux(fixedBitsDone, fixedBitsLeft - 1.L, 7.L)
+      var exceptSlice: StreamBits = bufWord(6, 0)
+      for (i <- 1 until maxVarIntBits / 8) {
+        exceptSlice = StreamMux(wordSlice === i.L, bufWord(Math.min(wordSize - 1, (i + 1) * 7 - 1), i * 7),
+          exceptSlice)
+      }
+      val exceptBitsLeft = curBitLen - mulByConst(wordSlice, 7)
+      val exceptBitsDone = exceptBitsLeft <= 7.L
+      val exceptByte = StreamMux(exceptBitsDone, 0.L ## exceptSlice, 1.L ## exceptSlice)
+      val output =
+        StreamMux(curState === EMIT_MAIN.id.L,
+          StreamMux(emitState === BLOCK_SIZE.id.L,
+            bestWidthId,
+            StreamMux(emitState === NUM_EXCEPTIONS.id.L,
+              numExceptions,
+              fixedByte
+            )
+          ),
+          StreamMux(emitState === EXCEPT_SIZE.id.L,
+            StreamMux(useVarInt,
+              1.L,
+              (exceptionWidth - 1.L) ## 0.L // write exceptionWidth - 1 to save a bit
+            ),
+            StreamMux(emitState === EXCEPT_POS.id.L,
+              wordIdx,
+              StreamMux(useVarInt,
+                exceptByte,
                 fixedByte
               )
-            ),
-            StreamMux(emitState === EXCEPT_SIZE.id.L,
-              StreamMux(useVarInt,
-                1.L,
-                (exceptionWidth - 1.L) ## 0.L // write exceptionWidth - 1 to save a bit
-              ),
-              StreamMux(emitState === EXCEPT_POS.id.L,
-                wordIdx,
-                StreamMux(useVarInt,
-                  exceptByte,
-                  fixedByte
-                )
-              )
             )
           )
-        val outputTopBit =
-          StreamMux(curState === EMIT_MAIN.id.L,
-            StreamMux(emitState === BLOCK_SIZE.id.L,
-              (math.max(util.log2Ceil(bitWidths.length), 1) - 1).L,
-              StreamMux(emitState === NUM_EXCEPTIONS.id.L,
-                (util.log2Ceil(batchWords + 1) - 1).L, // TODO is it possible for there to be 100% exceptions? We can
-                // save a bit if not
+        )
+      val outputTopBit =
+        StreamMux(curState === EMIT_MAIN.id.L,
+          StreamMux(emitState === BLOCK_SIZE.id.L,
+            (math.max(util.log2Ceil(bitWidths.length), 1) - 1).L,
+            StreamMux(emitState === NUM_EXCEPTIONS.id.L,
+              (util.log2Ceil(batchWords + 1) - 1).L, // TODO is it possible for there to be 100% exceptions? We can
+              // save a bit if not
+              fixedTopBit
+            )
+          ),
+          StreamMux(emitState === EXCEPT_SIZE.id.L,
+            StreamMux(useVarInt,
+              0.L,
+              util.log2Ceil(wordSize).L
+            ),
+            StreamMux(emitState === EXCEPT_POS.id.L,
+              (math.max(util.log2Ceil(batchWords), 1) - 1).L,
+              StreamMux(useVarInt,
+                7.L,
                 fixedTopBit
               )
-            ),
-            StreamMux(emitState === EXCEPT_SIZE.id.L,
-              StreamMux(useVarInt,
-                0.L,
-                util.log2Ceil(wordSize).L
-              ),
-              StreamMux(emitState === EXCEPT_POS.id.L,
-                (math.max(util.log2Ceil(batchWords), 1) - 1).L,
-                StreamMux(useVarInt,
-                  7.L,
-                  fixedTopBit
-                )
-              )
             )
           )
-        val outputValid =
-          StreamMux(curState === EMIT_MAIN.id.L,
-            StreamMux(emitState === MAIN_VALS.id.L,
-              curBitLen <= bestWidth,
-              true.L
-            ),
-            StreamMux(emitState === EXCEPT_SIZE.id.L,
-              true.L,
-              !(curBitLen <= bestWidth)
-            )
-          ).B
-        addBitsToOutputWord(output, outputTopBit, outputValid)
-        swhen(curState === EMIT_MAIN.id.L) {
-          swhen(emitState === BLOCK_SIZE.id.L) {
-            emitState := NUM_EXCEPTIONS.id.L
-          }.elsewhen(emitState === NUM_EXCEPTIONS.id.L) {
-            emitState := MAIN_VALS.id.L
-          }.otherwise {
-            // MAIN_VALS
-            swhen(fixedBitsDone || !outputValid) {
-              swhen(wordIdx === (batchWords - 1).L && numExceptions > 0.L) {
-                wordIdx := 0.L
-                curState := EMIT_EXCEPT.id.L
-                emitState := EXCEPT_SIZE.id.L
-              }.otherwise {
-                wordIdx := wordIdx + 1.L
-              }
-              wordSlice := 0.L
+        )
+      val outputValid =
+        StreamMux(curState === EMIT_MAIN.id.L,
+          StreamMux(emitState === MAIN_VALS.id.L,
+            curBitLen <= bestWidth,
+            true.L
+          ),
+          StreamMux(emitState === EXCEPT_SIZE.id.L,
+            true.L,
+            !(curBitLen <= bestWidth)
+          )
+        ).B
+      addBitsToOutputWord(output, outputTopBit, outputValid)
+      swhen(curState === EMIT_MAIN.id.L) {
+        swhen(emitState === BLOCK_SIZE.id.L) {
+          emitState := NUM_EXCEPTIONS.id.L
+        }.elsewhen(emitState === NUM_EXCEPTIONS.id.L) {
+          emitState := MAIN_VALS.id.L
+        }.otherwise {
+          // MAIN_VALS
+          swhen(fixedBitsDone || !outputValid) {
+            swhen(wordIdx === (batchWords - 1).L && numExceptions > 0.L) {
+              wordIdx := 0.L
+              curState := EMIT_EXCEPT.id.L
+              emitState := EXCEPT_SIZE.id.L
             }.otherwise {
-              wordSlice := wordSlice + 1.L
+              wordIdx := wordIdx + 1.L
             }
+            wordSlice := 0.L
+          }.otherwise {
+            wordSlice := wordSlice + 1.L
+          }
+        }
+      }.otherwise {
+        // EMIT_EXCEPT
+        swhen(emitState === EXCEPT_SIZE.id.L) {
+          emitState := EXCEPT_POS.id.L
+        }.elsewhen(emitState === EXCEPT_POS.id.L) {
+          swhen(outputValid) {
+            emitState := EXCEPT_VAL.id.L
+          }.otherwise {
+            wordIdx := wordIdx + 1.L
           }
         }.otherwise {
-          // EMIT_EXCEPT
-          swhen(emitState === EXCEPT_SIZE.id.L) {
+          // EXCEPT_VAL
+          swhen(StreamMux(useVarInt, exceptBitsDone, fixedBitsDone).B) {
+            wordIdx := wordIdx + 1.L
+            wordSlice := 0.L
             emitState := EXCEPT_POS.id.L
-          }.elsewhen(emitState === EXCEPT_POS.id.L) {
-            swhen(outputValid) {
-              emitState := EXCEPT_VAL.id.L
-            }.otherwise {
-              wordIdx := wordIdx + 1.L
-            }
           }.otherwise {
-            // EXCEPT_VAL
-            swhen(StreamMux(useVarInt, exceptBitsDone, fixedBitsDone).B) {
-              wordIdx := wordIdx + 1.L
-              wordSlice := 0.L
-              emitState := EXCEPT_POS.id.L
-            }.otherwise {
-              wordSlice := wordSlice + 1.L
-            }
+            wordSlice := wordSlice + 1.L
           }
         }
       }
-      // TODO this reset logic doesn't need to happen in its own final cycle, it can happen in the last cycle of the
-      // while loop
-      wordIdx := 0.L
-      curState := READ_INPUT.id.L
-      emitState := BLOCK_SIZE.id.L
-      wordSlice := 0.L
-      for (t <- bitCounts) {
-        t._1 := 0.L
-        t._2 := 0.L
-        t._3 := 0.L
-      }
+    }
+    // TODO this reset logic doesn't need to happen in its own final cycle, it can happen in the last cycle of the
+    // while loop
+    wordIdx := 0.L
+    curState := READ_INPUT.id.L
+    emitState := BLOCK_SIZE.id.L
+    wordSlice := 0.L
+    for (t <- bitCounts) {
+      t._1 := 0.L
+      t._2 := 0.L
+      t._3 := 0.L
     }
   }
   onFinished {

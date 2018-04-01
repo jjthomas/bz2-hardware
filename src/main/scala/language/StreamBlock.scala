@@ -16,17 +16,13 @@ object swhile {
 
 object onInput {
   def apply(block: => Unit): Unit = {
-    Builder.curBuilder.startInputContext()
     new StreamWhenContext(!StreamFinished, null, !StreamFinished, block)
-    Builder.curBuilder.endInputContext()
   }
 }
 
 object onFinished {
   def apply(block: => Unit): Unit = {
-    Builder.curBuilder.startInputContext()
     new StreamWhenContext(StreamFinished, null, StreamFinished, block)
-    Builder.curBuilder.endInputContext()
   }
 }
 
