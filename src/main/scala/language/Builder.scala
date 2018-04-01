@@ -805,7 +805,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         case s: Subtract => {
           val first = genSimBits(s.first)
           val second = genSimBits(s.second)
-          require(first >= second)
+          require(first >= second, s"tried to subtract ${s.first}=$first - ${s.second}=$second")
           first - second
         }
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
