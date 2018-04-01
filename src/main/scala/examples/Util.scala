@@ -21,4 +21,8 @@ object Util {
     }
     buf.toArray
   }
+
+  def bitsToBinaryString(numBits: Int, bits: BigInt): String = {
+    String.valueOf((0 until numBits - math.max(bits.bitLength, 1)).map(_ => '0').toArray) + bits.toString(2)
+  }
 }
