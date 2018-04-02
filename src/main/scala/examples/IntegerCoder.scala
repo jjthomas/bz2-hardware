@@ -43,7 +43,7 @@ object IntegerCoder {
     def exceptionCost(bitCount: Array[Int]): (Boolean, Int) = {
       val fixedCost = 1 + util.log2Ceil(wordSize) + (batchWords - bitCount(0)) * bitCount(1)
       val varintCost = 1 + bitCount(2)
-      (fixedCost < varintCost, if (fixedCost < varintCost) fixedCost else varintCost)
+      (fixedCost <= varintCost, if (fixedCost <= varintCost) fixedCost else varintCost)
     }
 
     def computeCost(width: Int, bitCount: Array[Int]): Int = {
