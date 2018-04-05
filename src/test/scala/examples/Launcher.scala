@@ -192,7 +192,7 @@ object Launcher {
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar))).toArray
-            Builder.curBuilder.genCSim(new File("pass_through.c"))
+            Builder.curBuilder.genCSim(new File("pass_through.c"), false)
             runStreamingTest(c, inputs, inputs)
           }
         }
@@ -204,7 +204,7 @@ object Launcher {
           (c) => {
             val inputs = Array("1111\"2,2\",21112\n1,2", "1,21112", "111,21112", "11,21112")
             val outputs = Array("1111\"2,2\",1,", "1,", "111,", "11,")
-            Builder.curBuilder.genCSim(new File("csv_field_extractor.c"))
+            Builder.curBuilder.genCSim(new File("csv_field_extractor.c"), false)
             runStreamingTest(c, inputs, outputs)
           }
         }
@@ -222,7 +222,7 @@ object Launcher {
               Array(Array("a", "b"), Array("a", "d"), Array("x")), -1)
             val outputs = Array(s"${matchStrs(0)}1,${matchStrs(1)}3,${matchStrs(2)}$longNum/",
               s"${matchStrs(2)}4,/", "/", "/")
-            Builder.curBuilder.genCSim(new File("json_field_extractor_specific.c"))
+            Builder.curBuilder.genCSim(new File("json_field_extractor_specific.c"), false)
             runStreamingTest(c, inputs, outputs)
           }
         }
@@ -243,7 +243,7 @@ object Launcher {
             val matchStrs = JsonFieldExtractor.genFieldMatchStrs(fields, 100)
             val outputs = Array(s"${matchStrs(0)}1,${matchStrs(1)}3,${matchStrs(2)}$longNum/",
               s"${matchStrs(2)}4,/", "/", "/").map(str => Util.charsToBits(str.toCharArray))
-            Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"))
+            Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"), false)
             runStreamingTest(c, inputs, outputs)
           }
         }
@@ -257,7 +257,7 @@ object Launcher {
             val input = IntegerCoder.genRandomWords(32, 16, seed)
             // Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 20, 32)
             val output = IntegerCoder.runCoder(input._1, input._2, 32, 4, Array(1, 6, 11, 16))
-            Builder.curBuilder.genCSim(new File("integer_coder.c"))
+            Builder.curBuilder.genCSim(new File("integer_coder.c"), false)
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
         }

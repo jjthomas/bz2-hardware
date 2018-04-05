@@ -328,11 +328,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
       case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
       case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
-      case i: StreamInput.type => "input[min(i, input_len - 1)]"
+      case i: StreamInput.type => "input[idx_protect(i, input_len - 1)]"
       case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
       case r: StreamReg => s"reg${r.stateId}_read"
-      case b: BRAMSelect => s"bram${b.arg.stateId}_read[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
-      case v: VectorRegSelect => s"vec${v.arg.stateId}_read[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
+      case b: BRAMSelect => s"bram${b.arg.stateId}_read[idx_protect(${genCBits(b.idx)}, ${b.arg.numEls - 1})]"
+      case v: VectorRegSelect => s"vec${v.arg.stateId}_read[idx_protect(${genCBits(v.idx)}, ${v.arg.numEls - 1})]"
       case m: StreamMux => s"(${genCBool(m.cond)} ? ${genCBits(m.t)} : ${genCBits(m.f)})"
       case b: StreamBool => genCBool(b) // treat the bool as regular bits
       case v: StreamVar => s"var_${v.stateId}"
@@ -952,15 +952,18 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
   }
 
-  def genCSim(outputFile: File): Unit = {
+  def genCSim(outputFile: File, ocl: Boolean): Unit = {
+    val oclParallelStreams = 128
+    val numInputBytes = 1 << 25;
     val vectorElsPerLine = 10
     def getCWidthForBitWidth(bitWidth: Int): Int = {
       assert(bitWidth <= 64)
-      1 << Math.max(util.log2Ceil(bitWidth), 3)
+      if (bitWidth == 1) 1 else 1 << Math.max(util.log2Ceil(bitWidth), 3)
     }
     def getCRandForBitWidth(bitWidth: Int): BigInt = {
       val cWidth = getCWidthForBitWidth(bitWidth)
       cWidth match {
+        case 1 => Random.nextInt() & 1
         case 8 => Random.nextInt() & ((1 << 8) - 1)
         case 16 => Random.nextInt() & ((1 << 16) - 1)
         case 32 => Random.nextInt()
@@ -1025,14 +1028,30 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val cw = new CWriter(outputFile)
     val cInputWidth = getCWidthForBitWidth(inputWidth)
     val cOutputWidth = getCWidthForBitWidth(outputWidth)
-    cw.writeLine(
-      s"""#include <stdint.h>
-         |#include <stdlib.h>
-         |#include <stdio.h>
-         |#include <sys/time.h>
-         |
-         |uint64_t min(uint64_t x, uint64_t y) { return x < y ? x : y; }\n""".stripMargin)
-    cw.writeLine(s"uint32_t run(uint${cInputWidth}_t *input, uint32_t input_len, uint${cOutputWidth}_t *output) {")
+    if (ocl) {
+      cw.writeLine(
+        s"""typedef bool uint1_t;
+           |typedef uchar uint8_t;
+           |typedef ushort uint16_t;
+           |typedef uint uint32_t;
+           |typedef ulong uint64_t;
+           |
+           |uint64_t idx_protect(uint64_t idx, uint64_t max_idx) { return idx; }
+           |""".stripMargin)
+    } else {
+      cw.writeLine(
+        s"""#include <stdint.h>
+           |#include <stdlib.h>
+           |#include <stdio.h>
+           |#include <sys/time.h>
+           |
+           |typedef uint8_t uint1_t;
+           |
+           |uint64_t idx_protect(uint64_t idx, uint64_t max_idx) { return idx < max_idx ? idx : max_idx; }
+           |""".stripMargin)
+    }
+    cw.writeLine(s"uint32_t run(${if (ocl) "__global " else ""}uint${cInputWidth}_t *input, uint32_t input_len, " +
+      s"${if (ocl) "__global " else ""}uint${cOutputWidth}_t *output) {")
     cw.writeLine("uint32_t output_count = 0;")
     for ((r, i) <- regs.zipWithIndex) {
       val init = if (r.init != null) r.init else getCRandForBitWidth(r.width)
@@ -1044,7 +1063,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     emitVectorInit(cw, vectorRegs.asInstanceOf[ArrayBuffer[Any]])
     emitVectorInit(cw, brams.asInstanceOf[ArrayBuffer[Any]])
     cw.writeLine("for (uint32_t i = 0; i <= input_len; i++) {")
-    cw.writeLine("uint8_t swhile_done = 0;")
+    cw.writeLine("uint1_t swhile_done = 0;")
     cw.writeLine("do {")
     for (i <- 0 until vars.length) {
       generateVar(cw, i)
@@ -1056,10 +1075,11 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       a.lhs match {
         case r: StreamReg => cw.writeLine(s"reg${r.stateId}_write = ${genCBits(a.rhs)};")
         case v: VectorRegSelect =>
-          cw.writeLine(s"vec${v.arg.stateId}_write[min(${genCBits(v.idx)}, ${v.arg.numEls - 1})] = ${genCBits(a.rhs)};")
+          cw.writeLine(
+            s"vec${v.arg.stateId}_write[idx_protect(${genCBits(v.idx)}, ${v.arg.numEls - 1})] = ${genCBits(a.rhs)};")
         case b: BRAMSelect =>
           cw.writeLine(
-            s"bram${b.arg.stateId}_write[min(${genCBits(b.idx)}, ${b.arg.numEls - 1})] = ${genCBits(a.rhs)};")
+            s"bram${b.arg.stateId}_write[idx_protect(${genCBits(b.idx)}, ${b.arg.numEls - 1})] = ${genCBits(a.rhs)};")
         case _ =>
       }
       cw.writeLine("}")
@@ -1078,12 +1098,25 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     cw.writeLine("}")
     cw.writeLine("return output_count;")
     cw.writeLine("}")
-    cw.writeLine(
-      s"""
+    if (ocl) {
+      cw.writeLine(
+        s"""
+         |__kernel
+         |__attribute__ ((reqd_work_group_size(1, 1, 1)))
+         |__attribute__ ((xcl_dataflow))
+         |void streaming_wrapper(__global uint8_t *input, __global uint8_t *output) {
+         |  ${(0 until oclParallelStreams).map(i =>
+                s"run(input + ${numInputBytes / 128 * i}, ${numInputBytes / 128}, output + ${numInputBytes / 128 * i});"
+              ).mkString("\n  ")}
+         |}
+         |""".stripMargin)
+    } else {
+      cw.writeLine(
+        s"""
          |int main() {
-         |  uint32_t LEN = 1 << 25;
+         |  uint32_t LEN = $numInputBytes;
          |  uint8_t *input = (uint8_t *)malloc(LEN);
-         |  uint8_t *output = (uint8_t *)malloc(LEN);
+         |  uint8_t *output = (uint8_t *)malloc(LEN * 2); // extra space if output size > input size
          |  for (uint32_t i = 0; i < LEN; i++) {
          |    input[i] = rand() % 256;
          |    output[i] = 0;
@@ -1098,7 +1131,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
          |  printf("%.2f MB/s, %d output tokens, random output byte: %d\\n", LEN / 1000000.0 / secs, output_count,
          |    output_count == 0 ? 0 : output[rand() % output_count]);
          |  return 0;
-         |}\n""".stripMargin)
+         |}
+         |""".stripMargin)
+    }
     cw.close()
   }
 
