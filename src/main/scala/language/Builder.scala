@@ -257,18 +257,18 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     depths
   }
 
-  def genBits(b: StreamBits, useNextToken: GenBitsCase): UInt = {
+  def genBits(b: StreamBits, valsToUse: GenBitsCase): UInt = {
     b match {
       case l: Literal => l.l.asUInt(l.getWidth.W)
-      case a: Add => genBits(a.first, useNextToken) +& genBits(a.second, useNextToken)
-      case s: Subtract => genBits(s.first, useNextToken) - genBits(s.second, useNextToken)
-      case c: Concat => genBits(c.first, useNextToken)##genBits(c.second, useNextToken)
-      case i: StreamInput.type => if (useNextToken == CUR_TICK) inputReg else
+      case a: Add => genBits(a.first, valsToUse) +& genBits(a.second, valsToUse)
+      case s: Subtract => genBits(s.first, valsToUse) - genBits(s.second, valsToUse)
+      case c: Concat => genBits(c.first, valsToUse)##genBits(c.second, valsToUse)
+      case i: StreamInput.type => if (valsToUse == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
-      case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
+      case s: BitSelect => genBits(s.arg, valsToUse)(s.upper, s.lower)
       case r: StreamReg => {
-        useNextToken match {
+        valsToUse match {
           case CUR_TICK => chiselRegs(r.stateId)
           // only use nextReg when pipeFinishing so that output is not contaminated before it is flushed
           case NEXT_TICK => Mux(pipeFinishing, nextRegs(r.stateId), chiselRegs(r.stateId))
@@ -276,8 +276,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       }
       case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
       case v: VectorRegSelect => {
-        val addr = genBits(v.idx, useNextToken)
-        useNextToken match {
+        val addr = genBits(v.idx, valsToUse)
+        valsToUse match {
           case CUR_TICK => chiselVectorRegs(v.arg.stateId)(addr)
           case NEXT_TICK => {
             if (nextVectorRegs(v.arg.stateId) == null) {
@@ -289,27 +289,27 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           }
         }
       }
-      case m: StreamMux => Mux(genBool(m.cond, useNextToken), genBits(m.t, useNextToken), genBits(m.f, useNextToken))
-      case b: StreamBool => genBool(b, useNextToken) // treat the bool as regular bits
-      case v: StreamVar => if (useNextToken == CUR_TICK) chiselVars(v.stateId) else nextVars(v.stateId) // don't need
+      case m: StreamMux => Mux(genBool(m.cond, valsToUse), genBits(m.t, valsToUse), genBits(m.f, valsToUse))
+      case b: StreamBool => genBool(b, valsToUse) // treat the bool as regular bits
+      case v: StreamVar => if (valsToUse == CUR_TICK) chiselVars(v.stateId) else nextVars(v.stateId) // don't need
       // Mux(pipeFinishing, ...) around nextVars because any regs it depends on are already muxed
       case _ => throw new StreamException("unexpected type in genBits: " + b.getClass.toString)
     }
   }
 
-  def genBool(b: StreamBool, useNextToken: GenBitsCase): Bool = {
+  def genBool(b: StreamBool, valsToUse: GenBitsCase): Bool = {
     b match {
-      case n: Negate => !genBool(n.arg, useNextToken)
-      case a: And => genBool(a.arg1, useNextToken) && genBool(a.arg2, useNextToken)
-      case o: Or => genBool(o.arg1, useNextToken) || genBool(o.arg2, useNextToken)
-      case c: BoolCast => genBits(c.arg, useNextToken).toBool()
-      case e: Equal => genBits(e.first, useNextToken) === genBits(e.second, useNextToken)
-      case n: NotEqual => genBits(n.first, useNextToken) =/= genBits(n.second, useNextToken)
-      case l: LessThan => genBits(l.first, useNextToken) < genBits(l.second, useNextToken)
-      case l: LessThanEqual => genBits(l.first, useNextToken) <= genBits(l.second, useNextToken)
-      case g: GreaterThan => genBits(g.first, useNextToken) > genBits(g.second, useNextToken)
-      case g: GreaterThanEqual => genBits(g.first, useNextToken) >= genBits(g.second, useNextToken)
-      case f: StreamFinished.type => if (useNextToken == CUR_TICK) finishedReg else
+      case n: Negate => !genBool(n.arg, valsToUse)
+      case a: And => genBool(a.arg1, valsToUse) && genBool(a.arg2, valsToUse)
+      case o: Or => genBool(o.arg1, valsToUse) || genBool(o.arg2, valsToUse)
+      case c: BoolCast => genBits(c.arg, valsToUse).toBool()
+      case e: Equal => genBits(e.first, valsToUse) === genBits(e.second, valsToUse)
+      case n: NotEqual => genBits(n.first, valsToUse) =/= genBits(n.second, valsToUse)
+      case l: LessThan => genBits(l.first, valsToUse) < genBits(l.second, valsToUse)
+      case l: LessThanEqual => genBits(l.first, valsToUse) <= genBits(l.second, valsToUse)
+      case g: GreaterThan => genBits(g.first, valsToUse) > genBits(g.second, valsToUse)
+      case g: GreaterThanEqual => genBits(g.first, valsToUse) >= genBits(g.second, valsToUse)
+      case f: StreamFinished.type => if (valsToUse == CUR_TICK) finishedReg else
         // unless there is no current input or we are about to flush the current input, use the current value
         Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case _ => throw new StreamException("unexpected type in genBool: " + b.getClass.toString)
@@ -645,12 +645,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       cb.io.a_wr := false.B
       if (reads.length > 0) {
         // If the current tick is being flushed, we send its results into the RAM read ports
-        // so that RAM reads will be available for the next input (if there is one) on the next cycle. The
-        // RAM read addresses are guaranteed to be based only on registers (and not other RAM reads) due to the
-        // pipeDepth <= 1 condition, so we know that the next addresses will be immediately available as the
-        // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamReadAtDepth1 flags below)
-        // where we need to use signals based on the incoming input and incoming register values rather than the
-        // registered input and current register values.
+        // so that RAM reads will be available for the next input (if there is one) on the next cycle.
         var addr: UInt = null
         if (depTable(i)._2.size == 1) {
           addr = genBits(depTable(i)._2.toSeq(0), NEXT_TICK)
