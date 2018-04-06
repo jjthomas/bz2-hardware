@@ -49,14 +49,13 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val chiselVars = new ArrayBuffer[UInt]
 
   val inputReg = Reg(UInt(inputWidth.W))
-  val inputRegValid = RegInit(false.B)
-  // marks if the current token is the finished token, is set once and remains true thereafter
-  val finishedReg = RegInit(false.B)
+  val finishedReg = RegInit(false.B) // is this the finished tick?
   // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
   var nextVectorRegs: Array[(UInt, UInt)] = null
   var nextVars: Array[UInt] = null
   val swhileDone = Wire(Bool())
+  val pipeActive = Wire(Bool())
   // all BRAM reads for active tick are ready
   val pipeFinalState = Wire(Bool())
   // a single tick is finishing, where a tick is defined as a single iteration of an swhile or the closing
@@ -265,7 +264,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case c: Concat => genBits(c.first, useNextToken)##genBits(c.second, useNextToken)
       case i: StreamInput.type => if (useNextToken == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
-        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputWord, inputReg)
+        Mux(!pipeActive || (pipeFinishing && swhileDone), io.inputWord, inputReg)
       case s: BitSelect => genBits(s.arg, useNextToken)(s.upper, s.lower)
       case r: StreamReg => {
         useNextToken match {
@@ -311,7 +310,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case g: GreaterThanEqual => genBits(g.first, useNextToken) >= genBits(g.second, useNextToken)
       case f: StreamFinished.type => if (useNextToken == CUR_TICK) finishedReg else
         // unless there is no current input or we are about to flush the current input, use the current value
-        Mux(!inputRegValid || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
+        Mux(!pipeActive || (pipeFinishing && swhileDone), io.inputFinished, finishedReg)
       case _ => throw new StreamException("unexpected type in genBool: " + b.getClass.toString)
     }
   }
@@ -550,10 +549,9 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     swhileDone := swhileDoneTmp
 
-    val nextTickMemsReady = Wire(Bool())
     val pipeState = RegInit(0.asUInt(util.log2Ceil(maxReadDepth + 1).W))
-    val pipeActive = pipeState =/= 0.U
-    io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
+    pipeActive := pipeState =/= 0.U
+    io.inputReady := !pipeActive || (pipeFinishing && swhileDone)
     pipeFinalState := pipeState === maxReadDepth.U
     // TODO if this tick doesn't do any depth 1 RAM reads and we have a pipeline with depth > 1,
     // it may be possible to run the tick in fewer cycles by considering the depth 2 reads to be done
@@ -561,28 +559,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     when (pipeActive && !pipeFinalState) {
       pipeState := pipeState + 1.U
     }
-    when (!pipeActive) {
-      when (!inputRegValid) { // no token now, so try to accept new input
-        inputReg := io.inputWord
-        finishedReg := io.inputFinished
-        inputRegValid := (io.inputFinished && !finishedReg) || io.inputValid
-        pipeState := Mux((io.inputFinished && !finishedReg) || io.inputValid, 1.U, 0.U)
-      } .otherwise { // we have a max one cycle delay for BRAM writes to commit at the end of the previous tick, so must
-        // be safe to reactivate pipe
-        pipeState := 1.U
-      }
-    } .elsewhen (pipeFinishing) { // active tick in the pipeline that had no output or whose output is accepted
-      when (swhileDone) { // current token done, so try to accept new input
-        inputReg := io.inputWord
-        when (nextTickMemsReady) {
-          finishedReg := io.inputFinished
-        }
-        inputRegValid := ((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady // mark the input
-        // valid even for the finished token to keep the pipe state machine in order
-        pipeState := Mux(((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady, 1.U, 0.U)
-      } .otherwise { // may be possible to start another tick now
-        pipeState := Mux(nextTickMemsReady, 1.U, 0.U)
-      }
+    when (!pipeActive || (pipeFinishing && swhileDone)) { // try to accept new input
+      inputReg := io.inputWord
+      finishedReg := io.inputFinished
+      pipeState := Mux((io.inputFinished && !finishedReg) || io.inputValid, 1.U, 0.U)
+    } .elsewhen (pipeFinishing) {
+      pipeState := 1.U
     }
     io.outputFinished := finishedReg && !pipeActive
 
@@ -645,12 +627,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       cb.io.a_wr := false.B
       if (reads.length > 0) {
         // If the current tick is being flushed, we send its results into the RAM read ports
-        // so that RAM reads will be available for the next input (if there is one) on the next cycle. The
-        // RAM read addresses are guaranteed to be based only on registers (and not other RAM reads) due to the
-        // pipeDepth <= 1 condition, so we know that the next addresses will be immediately available as the
-        // pipeline is being flushed. RAM reads are the only case (besides the nextTickDoesRamReadAtDepth1 flags below)
-        // where we need to use signals based on the incoming input and incoming register values rather than the
-        // registered input and current register values.
+        // so that RAM reads will be available for the next input (if there is one) on the next cycle.
         var addr: UInt = null
         if (depTable(i)._2.size == 1) {
           addr = genBits(depTable(i)._2.toSeq(0), NEXT_TICK)
@@ -708,55 +685,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         cb.io.b_wr := false.B
       }
     }
-
-    // if the returned condition evaluates to false, cond must also evaluate to false
-    def maximalNonRamReadingCond(cond: StreamBool): StreamBool = {
-      if (collectAllReads(cond, new mutable.HashSet[Int]).size == 0) {
-        cond
-      } else {
-        cond match {
-          case And(arg1, arg2) => And(maximalNonRamReadingCond(arg1), maximalNonRamReadingCond(arg2))
-          case _ => true.L.B
-        }
-      }
-    }
-
-    def getDepth1Reads(b: StreamBits): mutable.Set[Int] = {
-      collectAllReads(b, new mutable.HashSet[Int]).filter(r => readDepths(r) == 1)
-    }
-
-    val nextTickDoesRamReadAtDepth1 = (0 until brams.length).map(_ => false.B).toArray
-    // TODO not having the muxes in genBits/genBool for the NEXT_TICK could save logic
-    // here if RAM reads only occur under one condition, in which case the condition is not already
-    // computed with the muxes to select the correct address for the pipelined read
-    // TODO these rules assume that assign/emit RAM reads in the post-while tick for the next token occur immediately
-    // on the next tick
-    for ((c, _, a) <- assignments) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(assignIdxOr0(a.lhs)).union(getDepth1Reads(a.rhs))) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    for ((c, _, e) <- emits) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(e.data)) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    for ((c, cond) <- conds) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(cond)) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    // rule that checks whether there is a write-read conflict on any depth 1 RAM
-    // TODO may be profitable to remove nextTickDoesRamReadAtDepth1 entries in pipelines where they don't lead to
-    // higher throughput
-    var nextTickMemsReadTmp = true.B
-    for ((cb, nextRead) <- chiselBrams.zip(nextTickDoesRamReadAtDepth1)) {
-      nextTickMemsReadTmp = nextTickMemsReadTmp && (!cb.io.b_wr || !nextRead)
-    }
-    nextTickMemsReady := nextTickMemsReadTmp
   }
 
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {
