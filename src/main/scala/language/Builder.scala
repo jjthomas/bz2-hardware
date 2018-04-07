@@ -4,6 +4,7 @@ import java.io.{PrintWriter, File}
 
 import chisel3._
 import examples.{DualPortBRAM, ProcessingUnitIO}
+import language.BRAMMode.BRAMMode
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -46,6 +47,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val chiselRegs = new ArrayBuffer[UInt]
   val chiselVectorRegs = new ArrayBuffer[Vec[UInt]]
   val chiselBrams = new ArrayBuffer[DualPortBRAM]
+  val chiselBramWriteBuffers = new ArrayBuffer[UInt]
+  val chiselBramUseWriteBuffers = new ArrayBuffer[Bool]
   val chiselVars = new ArrayBuffer[UInt]
 
   val inputReg = Reg(UInt(inputWidth.W))
@@ -102,8 +105,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     newReg
   }
 
-  def registerBram(width: Int, numEls: Int): StreamBRAM = {
-    val newBram = StreamBRAM(width, numEls, brams.length)
+  def registerBram(width: Int, numEls: Int, mode: BRAMMode): StreamBRAM = {
+    val newBram = StreamBRAM(width, numEls, mode, brams.length)
     brams.append(newBram)
     newBram
   }
@@ -274,7 +277,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           case NEXT_TICK => Mux(pipeFinishing, nextRegs(r.stateId), chiselRegs(r.stateId))
         }
       }
-      case b: BRAMSelect => chiselBrams(b.arg.stateId).io.a_dout
+      case b: BRAMSelect =>
+        if (chiselBramUseWriteBuffers(b.arg.stateId) == null)
+          chiselBrams(b.arg.stateId).io.a_dout
+        else
+          Mux(chiselBramUseWriteBuffers(b.arg.stateId), chiselBramWriteBuffers(b.arg.stateId),
+            chiselBrams(b.arg.stateId).io.a_dout)
       case v: VectorRegSelect => {
         val addr = genBits(v.idx, valsToUse)
         valsToUse match {
@@ -505,13 +513,6 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       bramReads(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits)]
       bramWrites(i) = new ArrayBuffer[(StreamBool, Boolean, StreamBits, StreamBits)]
     }
-    // separate loop for initialization because one chiselVar may depend on another
-    for ((varWidth, _) <- vars) {
-      chiselVars.append(Wire(UInt(varWidth.W)))
-    }
-    for (((_, varExpr), i) <- vars.zipWithIndex) {
-      chiselVars(i) := genBits(varExpr, CUR_TICK)
-    }
 
     def assignIdxOr0(a: AssignableStreamData): StreamBits = {
       a match {
@@ -544,6 +545,24 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val readDepths = determineReadDepths(depTable)
     val maxReadDepth = if (readDepths.length == 0) 1 else readDepths.max
 
+    for ((b, i) <- brams.zipWithIndex) {
+      if (b.mode == BRAMMode.CONFLICT_REG && readDepths(i) == 1) {
+        chiselBramUseWriteBuffers.append(RegInit(false.B))
+        chiselBramWriteBuffers.append(Reg(UInt(b.width.W)))
+      } else {
+        chiselBramUseWriteBuffers.append(null)
+        chiselBramWriteBuffers.append(null)
+      }
+    }
+
+    // separate loop for initialization because one chiselVar may depend on another
+    for ((varWidth, _) <- vars) {
+      chiselVars.append(Wire(UInt(varWidth.W)))
+    }
+    for (((_, varExpr), i) <- vars.zipWithIndex) {
+      chiselVars(i) := genBits(varExpr, CUR_TICK)
+    }
+
     var swhileDoneTmp = true.B
     for (cond <- swhileConds) {
       swhileDoneTmp = swhileDoneTmp && !genBool(cond, CUR_TICK)
@@ -551,7 +570,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     swhileDone := swhileDoneTmp
 
     val nextTickMemsReady = Wire(Bool())
-    val pipeState = RegInit(0.asUInt(util.log2Ceil(maxReadDepth + 1).W))
+    val pipeStateWidth = util.log2Ceil(maxReadDepth + 1)
+    val pipeState = RegInit(0.asUInt(pipeStateWidth.W))
     val pipeActive = pipeState =/= 0.U
     io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
     pipeFinalState := pipeState === maxReadDepth.U
@@ -572,6 +592,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         pipeState := 1.U
       }
     } .elsewhen (pipeFinishing) { // active tick in the pipeline that had no output or whose output is accepted
+      val nextPipeState = Wire(UInt(pipeStateWidth.W))
       when (swhileDone) { // current token done, so try to accept new input
         inputReg := io.inputWord
         when (nextTickMemsReady) {
@@ -579,9 +600,18 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         }
         inputRegValid := ((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady // mark the input
         // valid even for the finished token to keep the pipe state machine in order
-        pipeState := Mux(((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady, 1.U, 0.U)
+        nextPipeState := Mux(((io.inputFinished && !finishedReg) || io.inputValid) && nextTickMemsReady, 1.U, 0.U)
       } .otherwise { // may be possible to start another tick now
-        pipeState := Mux(nextTickMemsReady, 1.U, 0.U)
+        nextPipeState := Mux(nextTickMemsReady, 1.U, 0.U)
+      }
+      pipeState := nextPipeState
+      for (((useBuffer, buffer), i) <- chiselBramUseWriteBuffers.zip(chiselBramWriteBuffers).zipWithIndex) {
+        if (!(useBuffer == null)) {
+          useBuffer := nextPipeState === 1.U /* only use buffer if we are immediately starting the pipe up again */ &&
+            chiselBrams(i).io.b_wr &&
+            (chiselBrams(i).io.a_addr /* next read address */ === chiselBrams(i).io.b_addr)
+          buffer := chiselBrams(i).io.b_din
+        }
       }
     }
     io.outputFinished := finishedReg && !pipeActive
@@ -685,6 +715,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         case _ =>
       }
     }
+    var anyWriteStallBramWritten = false.B
     for (((cb, writes), i) <- chiselBrams.zip(bramWrites).zipWithIndex) {
       if (writes.length > 0) {
         var wr = genBool(writes(0)._1, CUR_TICK) && (if (writes(0)._2) true.B else swhileDone)
@@ -697,61 +728,16 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           data = Mux(valid, genBits(d, CUR_TICK), data)
         }
         cb.io.b_wr := wr && pipeFinishing
+        if (brams(i).mode == BRAMMode.STALL_ON_WRITE && readDepths(i) == 1) {
+          anyWriteStallBramWritten = anyWriteStallBramWritten || cb.io.b_wr
+        }
         cb.io.b_addr := addr
         cb.io.b_din := data
       } else {
         cb.io.b_wr := false.B
       }
     }
-
-    // if the returned condition evaluates to false, cond must also evaluate to false
-    def maximalNonRamReadingCond(cond: StreamBool): StreamBool = {
-      if (collectAllReads(cond, new mutable.HashSet[Int]).size == 0) {
-        cond
-      } else {
-        cond match {
-          case And(arg1, arg2) => And(maximalNonRamReadingCond(arg1), maximalNonRamReadingCond(arg2))
-          case _ => true.L.B
-        }
-      }
-    }
-
-    def getDepth1Reads(b: StreamBits): mutable.Set[Int] = {
-      collectAllReads(b, new mutable.HashSet[Int]).filter(r => readDepths(r) == 1)
-    }
-
-    val nextTickDoesRamReadAtDepth1 = (0 until brams.length).map(_ => false.B).toArray
-    // TODO not having the muxes in genBits/genBool for the NEXT_TICK could save logic
-    // here if RAM reads only occur under one condition, in which case the condition is not already
-    // computed with the muxes to select the correct address for the pipelined read
-    // TODO these rules assume that assign/emit RAM reads in the post-while tick for the next token occur immediately
-    // on the next tick
-    for ((c, _, a) <- assignments) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(assignIdxOr0(a.lhs)).union(getDepth1Reads(a.rhs))) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    for ((c, _, e) <- emits) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(e.data)) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    for ((c, cond) <- conds) {
-      val maxC = maximalNonRamReadingCond(c)
-      for (r <- getDepth1Reads(cond)) {
-        nextTickDoesRamReadAtDepth1(r) = nextTickDoesRamReadAtDepth1(r) || genBool(maxC, NEXT_TICK)
-      }
-    }
-    // rule that checks whether there is a write-read conflict on any depth 1 RAM
-    // TODO may be profitable to remove nextTickDoesRamReadAtDepth1 entries in pipelines where they don't lead to
-    // higher throughput
-    var nextTickMemsReadTmp = true.B
-    for ((cb, nextRead) <- chiselBrams.zip(nextTickDoesRamReadAtDepth1)) {
-      nextTickMemsReadTmp = nextTickMemsReadTmp && (!cb.io.b_wr || !nextRead)
-    }
-    nextTickMemsReady := nextTickMemsReadTmp
+    nextTickMemsReady := !anyWriteStallBramWritten
   }
 
   def simulate(numInputBits: Int, inputBits: BigInt): (Int, BigInt) = {

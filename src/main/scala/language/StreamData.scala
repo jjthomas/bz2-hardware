@@ -74,12 +74,18 @@ object NewStreamReg {
 }
 case class StreamReg(width: Int, init: BigInt, stateId: Int) extends AssignableStreamData(width)
 
+object BRAMMode extends Enumeration {
+  type BRAMMode = Value
+  val STALL_ON_WRITE, CONFLICT_REG = Value
+}
+import BRAMMode._
+
 object NewStreamBRAM {
-  def apply(width: Int, numEls: Int): StreamBRAM = {
-    Builder.curBuilder.registerBram(width, numEls)
+  def apply(width: Int, numEls: Int, mode: BRAMMode = STALL_ON_WRITE): StreamBRAM = {
+    Builder.curBuilder.registerBram(width, numEls, mode)
   }
 }
-case class StreamBRAM(width: Int, numEls: Int, stateId: Int) {
+case class StreamBRAM(width: Int, numEls: Int, mode: BRAMMode, stateId: Int) {
   def apply(idx: StreamBits) = BRAMSelect(this, idx)
 }
 
