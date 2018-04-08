@@ -162,7 +162,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
     (0 until wordSize).map(lz => BigInt(((wordSize - lz) + 7 - 1) / 7 * 8)))
   object CodingState extends Enumeration {
     type CodingState = Value
-    val READ_INPUT, EMIT_MAIN, EMIT_EXCEPT = Value
+    val READ_INPUT, SAVE_BEST_WIDTH, EMIT_MAIN, EMIT_EXCEPT = Value
   }
   import CodingState._
   val curState = NewStreamReg(util.log2Ceil(CodingState.maxId), READ_INPUT.id)
@@ -257,11 +257,12 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
     }
     bestWidths = nextWidths
   }
-  val bestWidthId = bestWidths(0)._3
+
+  val bestWidthId = NewStreamReg(math.max(util.log2Ceil(bitWidths.length), 1), 0)
+  val useVarInt = NewStreamReg(1, 0)
+  val numExceptions = NewStreamReg(util.log2Ceil(batchWords + 1), 0)
+  val exceptionWidth = NewStreamReg(util.log2Ceil(wordSize + 1), 0)
   val bestWidth = idToBitWidth(bestWidthId)
-  val useVarInt = bestWidths(0)._2
-  val numExceptions = bestWidths(0)._4
-  val exceptionWidth = bestWidths(0)._5
 
   def addBitsToOutputWord(bits: StreamBits, topBit: StreamBits, valid: StreamBool): Unit = { // topBit is highest valid
   // bit in bits
@@ -306,7 +307,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
       byteIdx := 0.L
       swhen(wordIdx === (batchWords - 1).L) {
         wordIdx := 0.L
-        curState := EMIT_MAIN.id.L
+        curState := SAVE_BEST_WIDTH.id.L
       }.otherwise {
         wordIdx := wordIdx + 1.L
       }
@@ -325,7 +326,13 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
     }
   } .otherwise {
     swhile(wordIdx <= batchWords.L) {
-      swhen (wordIdx < batchWords.L) {
+      swhen (curState === SAVE_BEST_WIDTH.id.L) {
+        bestWidthId := bestWidths(0)._3
+        useVarInt := bestWidths(0)._2
+        numExceptions := bestWidths(0)._4
+        exceptionWidth := bestWidths(0)._5
+        curState := EMIT_MAIN.id.L
+      } .elsewhen (wordIdx < batchWords.L) {
         var fixedByte: StreamBits = bufWord(7, 0)
         for (i <- 1 until wordBytes) {
           fixedByte = StreamMux(wordSlice === i.L, bufWord((i + 1) * 8 - 1, i * 8), fixedByte)
@@ -352,13 +359,13 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
               )
             ),
             StreamMux(emitState === EXCEPT_SIZE.id.L,
-              StreamMux(useVarInt,
+              StreamMux(useVarInt.B,
                 1.L,
                 (exceptionWidth - 1.L) ## 0.L // write exceptionWidth - 1 to save a bit
               ),
               StreamMux(emitState === EXCEPT_POS.id.L,
                 wordIdx,
-                StreamMux(useVarInt,
+                StreamMux(useVarInt.B,
                   exceptByte,
                   fixedByte
                 )
@@ -376,13 +383,13 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
               )
             ),
             StreamMux(emitState === EXCEPT_SIZE.id.L,
-              StreamMux(useVarInt,
+              StreamMux(useVarInt.B,
                 0.L,
                 util.log2Ceil(wordSize).L
               ),
               StreamMux(emitState === EXCEPT_POS.id.L,
                 (math.max(util.log2Ceil(batchWords), 1) - 1).L,
-                StreamMux(useVarInt,
+                StreamMux(useVarInt.B,
                   7.L,
                   fixedTopBit
                 )
@@ -433,7 +440,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
             }
           }.otherwise {
             // EXCEPT_VAL
-            swhen(StreamMux(useVarInt, exceptBitsDone, fixedBitsDone).B) {
+            swhen(StreamMux(useVarInt.B, exceptBitsDone, fixedBitsDone).B) {
               wordIdx := wordIdx + 1.L
               wordSlice := 0.L
               emitState := EXCEPT_POS.id.L
