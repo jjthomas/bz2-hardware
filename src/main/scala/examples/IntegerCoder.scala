@@ -325,7 +325,9 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
       byteIdx := byteIdx + 1.L
     }
   } .otherwise {
-    swhile(wordIdx <= batchWords.L) {
+    swhile(wordIdx <= batchWords.L) { // any logic that does not directly process an input token (i.e. all logic
+      // operating on states other than READ_INPUT) needs to occur inside this loop so that the post-while tick logic
+      // is always ready to process the current input token
       swhen (curState === SAVE_BEST_WIDTH.id.L) {
         bestWidthId := bestWidths(0)._3
         useVarInt := bestWidths(0)._2
@@ -451,7 +453,7 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
         }
       } .otherwise { // wordIdx == batchWords
         wordIdx := 0.L
-        curState := READ_INPUT.id.L
+        curState := READ_INPUT.id.L // this state update ends the while loop
         emitState := BLOCK_SIZE.id.L
         wordSlice := 0.L
         for (t <- bitCounts) {
