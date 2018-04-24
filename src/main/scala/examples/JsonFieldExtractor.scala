@@ -59,7 +59,6 @@ object JsonFieldExtractor {
       curStateId = maxFieldChars
     }
     val stateBits = util.log2Ceil(curStateId + 1) // need space for curStateId as well
-    assert(stateBits <= 24) // otherwise fieldMatchIds will overflow 32 bits
 
     val fieldMatchIds = new Array[Int](fields.length)
     val sequentialTransitions = new ArrayBuffer[BigInt]
@@ -68,7 +67,7 @@ object JsonFieldExtractor {
         var trans = BigInt(c.toInt) << stateBits
         if (j == branch.length - 1) {
           trans |= curStateId // field complete
-          fieldMatchIds(fieldIdx) = ((sequentialStateIds(i) + j) << 8) | c.toInt
+          fieldMatchIds(fieldIdx) = sequentialStateIds(i) + j
         } else {
           trans |= (sequentialStateIds(i) + j + 1) // must be the state ID after the current one
         }
@@ -82,7 +81,7 @@ object JsonFieldExtractor {
         var trans = BigInt(c.toInt) << stateBits
         if (nextBranch == -1) {
           trans |= curStateId // field complete
-          fieldMatchIds(fieldIdx) = (stateForSplit << 8) | c.toInt
+          fieldMatchIds(fieldIdx) = stateForSplit
         } else {
           trans |= sequentialStateIds(nextBranch)
         }
@@ -112,9 +111,30 @@ object JsonFieldExtractor {
     (numBits, bits)
   }
 
+  def genConfigArraysForC(fields: Array[Array[String]], maxFieldChars: Int): (Seq[Int], Seq[Int]) = {
+    val (seqTrans, splitTrans, maxStateId, _) = genTransitions(fields, maxFieldChars)
+    val stateBits = util.log2Ceil(maxStateId + 1)
+    assert(stateBits <= 8)
+
+    val seqArray = new ArrayBuffer[Int]
+    val splitArray = new ArrayBuffer[Int]
+    val stateBitsMask = (BigInt(1) << stateBits) - 1
+    val charMask = BigInt(255)
+    for (t <- seqTrans) {
+      seqArray.append((t & stateBitsMask).toInt)
+      seqArray.append(((t >> stateBits) & charMask).toInt)
+    }
+    for (t <- splitTrans) {
+      splitArray.append((t & stateBitsMask).toInt)
+      splitArray.append(((t >> stateBits) & stateBitsMask).toInt)
+      splitArray.append(((t >> (2 * stateBits)) & charMask).toInt)
+    }
+    (seqArray, splitArray)
+  }
+
   def genFieldMatchStrs(fields: Array[Array[String]], maxFieldChars: Int): Seq[String] = {
     val (_, _, maxStateId, fieldMatchIds) = genTransitions(fields, maxFieldChars)
-    val matchStrChars = ((util.log2Ceil(maxStateId + 1) + 8) + 8 - 1) / 8
+    val matchStrChars = (util.log2Ceil(maxStateId + 1) + 8 - 1) / 8
     fieldMatchIds.map(m => String.valueOf((0 until matchStrChars).map(i => ((m >> (i * 8)) & 255).toChar).toArray))
   }
 
@@ -143,8 +163,8 @@ object JsonFieldExtractor {
         if (splitTrans.length == 0) null else NewStreamVectorReg(2 * stateBits + 8, splitTrans.length, splitTrans)
       }
     val stateStack = (0 until maxNestDepth).map(i => NewStreamReg(stateBits, null))
-    val matchStrChars = ((stateBits + 8) + 8 - 1) / 8
-    val matchStrEmitCounter = NewStreamReg(util.log2Ceil(matchStrChars), 0)
+    val matchStrChars = (stateBits + 8 - 1) / 8
+    val matchStrEmitCounter = NewStreamReg(math.max(util.log2Ceil(matchStrChars), 1), 0)
 
     if (seqTrans == null) {
       val numWordsForConfigToken = ((2 * stateBits + 8) + 8 - 1) / 8
@@ -210,17 +230,17 @@ object JsonFieldExtractor {
       }
     }
 
-    def emitMatchStateIfMatched(nextMatchState: StreamBits, output: StreamBits) = {
+    def emitMatchStateIfMatched(nextMatchState: StreamBits) = {
       swhen(nextMatchState === maxMatchId.L) {
         swhile(matchStrEmitCounter < (matchStrChars - 1).L) {
           for (i <- 0 until (matchStrChars - 1)) {
             swhen(matchStrEmitCounter === i.L) {
-              Emit(output((i + 1) * 8 - 1, i * 8))
+              Emit(matchState((i + 1) * 8 - 1, i * 8))
             }
           }
           matchStrEmitCounter := matchStrEmitCounter + 1.L
         }
-        Emit(output(output.getWidth - 1, (matchStrChars - 1) * 8))
+        Emit(matchState(stateBits - 1, (matchStrChars - 1) * 8))
         matchStrEmitCounter := 0.L
       }
     }
@@ -267,7 +287,7 @@ object JsonFieldExtractor {
         }
         swhen(parseState === EXP_COM.id.L || parseState === IN_VAL.id.L) {
           swhen(nestDepth === 1.L) {
-            popStateStack
+            popStateStack // don't want field sep here since we are emitting record separator
           }.otherwise {
             popStateStackWithFieldSep
           }
@@ -288,7 +308,7 @@ object JsonFieldExtractor {
         // only allow match to start at top level
         val selectedSeqEl = if (seqTransRam == null) seqTransVec(matchState) else seqTransRam(matchState)
         swhen(StreamInput === selectedSeqEl(stateBits + 7, stateBits)) {
-          emitMatchStateIfMatched(selectedSeqEl(stateBits - 1, 0), matchState ## StreamInput)
+          emitMatchStateIfMatched(selectedSeqEl(stateBits - 1, 0))
           matchState := selectedSeqEl(stateBits - 1, 0)
         }.otherwise {
           var noSplit: StreamBool = true.L.B
@@ -299,7 +319,7 @@ object JsonFieldExtractor {
                 StreamInput === selectedSplitEl(2 * stateBits + 7, 2 * stateBits)
               noSplit = noSplit && !splitMatch
               swhen(splitMatch) {
-                emitMatchStateIfMatched(selectedSplitEl(2 * stateBits - 1, stateBits), matchState ## StreamInput)
+                emitMatchStateIfMatched(selectedSplitEl(2 * stateBits - 1, stateBits))
                 matchState := selectedSplitEl(2 * stateBits - 1, stateBits)
               }
             }
