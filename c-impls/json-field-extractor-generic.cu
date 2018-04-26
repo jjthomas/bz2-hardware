@@ -3,12 +3,22 @@
 #include <fstream>
 #include <stdlib.h>
 #include <string.h>
+#include <cuda.h>
 
 using namespace std;
 
 #define MAX_DEPTH 5
 #define MAX_FIELD_CHARS 200
 #define MAX_FIELDS 10
+
+#define NUM_SMS 24
+// must be power of two
+#define BLOCK_SIZE 256
+// must be power of two
+#define NUM_THREADS_PER_SM 2048
+#define NUM_BLOCKS_PER_SM (NUM_THREADS_PER_SM / BLOCK_SIZE)
+#define NUM_BLOCKS (NUM_SMS * NUM_BLOCKS_PER_SM)
+#define NUM_THREADS (NUM_THREADS_PER_SM * NUM_SMS)
 
 typedef enum {EXP_KEY, IN_KEY, EXP_COL, EXP_VAL, IN_VAL, EXP_COM} state;
 
@@ -25,8 +35,12 @@ typedef struct __attribute__((packed)) {
   uint8_t expected_input;
 } seq_entry;
 
-void run(uint8_t *input, uint8_t num_seq_confs, uint8_t num_split_confs, uint32_t input_count, uint8_t *output,
-  uint32_t *output_count) {
+__global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_split_confs, uint32_t input_count,
+  uint8_t *output_full, uint32_t *output_count) {
+
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  uint8_t *input = input_full + index * input_count;
+  uint8_t *output = output_full + index * input_count;
 
   uint32_t input_idx = 0;
   uint32_t output_idx = 0;
@@ -151,7 +165,7 @@ void run(uint8_t *input, uint8_t num_seq_confs, uint8_t num_split_confs, uint32_
     last_char = input[i];
     parse_state = next_parse_state;
   }
-  *output_count = output_idx;
+  *(output_count + index) = output_idx;
 }
 
 int main(int argc, char **argv) {
@@ -161,7 +175,7 @@ int main(int argc, char **argv) {
   uint8_t seq_confs[] = {1, 34, 2, 97, 3, 100, 4, 95, 5, 105, 6, 100, 200, 34, 8, 121, 9, 112, 10, 101, 200, 34};
   uint8_t split_confs[] = {4, 7, 116};
 
-  ifstream infile("/Users/joseph/streaming-benchmarks/data/kafka-json.txt");
+  ifstream infile("kafka-json.txt");
   string line;
 
   uint32_t input_buf_size = sizeof(seq_confs) + sizeof(split_confs) + CHARS;
@@ -178,16 +192,35 @@ int main(int argc, char **argv) {
     memcpy(input_buf + chars, line.c_str(), line.length());
     chars += line.length();
   }
+
+  uint8_t *combined_input = new uint8_t[chars * NUM_THREADS];
+  for (uint32_t i = 0; i < NUM_THREADS; i++) {
+    memcpy(combined_input + i * chars, input_buf, chars);
+  }
+
   uint8_t *output_buf = new uint8_t[CHARS];
   uint32_t output_count;
 
+  uint8_t *output_dev, *input_dev;
+  uint32_t *output_count_dev;
+  cudaSetDevice(1);
+  cudaMalloc((void **) &output_dev, chars * NUM_THREADS);
+  cudaMalloc((void **) &input_dev, chars * NUM_THREADS);
+  cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS);
+
+  cudaMemcpy(input_dev, combined_input, chars * NUM_THREADS, cudaMemcpyHostToDevice);
+
   struct timeval start, end, diff;
   gettimeofday(&start, 0);
-  run(input_buf, sizeof(seq_confs) / 2, sizeof(split_confs) / 3, chars, output_buf, &output_count);
+  run<<<NUM_BLOCKS, BLOCK_SIZE>>>(input_dev, sizeof(seq_confs) / 2, sizeof(split_confs) / 3, chars, output_dev,
+    output_count_dev);
+  cudaThreadSynchronize();
   gettimeofday(&end, 0);
   timersub(&end, &start, &diff);
+  cudaMemcpy(&output_count, output_count_dev, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+  cudaMemcpy(output_buf, output_dev, output_count, cudaMemcpyDeviceToHost);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
-  printf("%.2f MB/s, %d output tokens, random output byte: %d\n", chars / 1000000.0 / secs, output_count,
+  printf("%.2f MB/s, %d output tokens, random output byte: %d\n", (chars * NUM_THREADS) / 1000000.0 / secs, output_count,
     output_count == 0 ? 0 : output_buf[rand() % output_count]);
   return 0;
 }
