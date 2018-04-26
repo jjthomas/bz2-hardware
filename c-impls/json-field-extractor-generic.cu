@@ -11,7 +11,7 @@ using namespace std;
 #define MAX_FIELD_CHARS 200
 #define MAX_FIELDS 10
 
-#define NUM_SMS 24
+#define NUM_SMS 80
 // must be power of two
 #define BLOCK_SIZE 256
 // must be power of two
@@ -38,7 +38,7 @@ typedef struct __attribute__((packed)) {
 __global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_split_confs, uint32_t input_count,
   uint8_t *output_full, uint32_t *output_count) {
 
-  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
   uint8_t *input = input_full + index * input_count;
   uint8_t *output = output_full + index * input_count;
 
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
   uint32_t input_buf_size = conf_size + GLOBAL_CHARS;
   uint8_t *input_buf = new uint8_t[input_buf_size];
   uint32_t global_chars = 0;
-  uint32_t chars = 0;
+  uint64_t chars = 0;
   memcpy(input_buf + global_chars, seq_confs, sizeof(seq_confs));
   global_chars += sizeof(seq_confs);
   memcpy(input_buf + global_chars, split_confs, sizeof(split_confs));
@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
   }
 
   uint8_t *combined_input = new uint8_t[chars * NUM_THREADS];
-  for (uint32_t i = 0; i < NUM_THREADS; i++) {
+  for (uint64_t i = 0; i < NUM_THREADS; i++) {
     memcpy(combined_input + i * chars, input_buf, conf_size);
     memcpy(combined_input + i * chars + conf_size, input_buf + conf_size + i, chars - conf_size);
   }
