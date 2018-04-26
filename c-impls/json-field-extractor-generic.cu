@@ -169,6 +169,7 @@ __global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_spli
 }
 
 int main(int argc, char **argv) {
+  uint32_t GLOBAL_CHARS = 10000000;
   uint32_t CHARS = atoi(argv[1]);
 
   // extracts "ad_id" and "ad_type"
@@ -178,32 +179,38 @@ int main(int argc, char **argv) {
   ifstream infile("kafka-json.txt");
   string line;
 
-  uint32_t input_buf_size = sizeof(seq_confs) + sizeof(split_confs) + CHARS;
+  uint32_t conf_size = sizeof(seq_confs) + sizeof(split_confs);
+  uint32_t input_buf_size = conf_size + GLOBAL_CHARS;
   uint8_t *input_buf = new uint8_t[input_buf_size];
+  uint32_t global_chars = 0;
   uint32_t chars = 0;
-  memcpy(input_buf + chars, seq_confs, sizeof(seq_confs));
-  chars += sizeof(seq_confs);
-  memcpy(input_buf + chars, split_confs, sizeof(split_confs));
-  chars += sizeof(split_confs);
+  memcpy(input_buf + global_chars, seq_confs, sizeof(seq_confs));
+  global_chars += sizeof(seq_confs);
+  memcpy(input_buf + global_chars, split_confs, sizeof(split_confs));
+  global_chars += sizeof(split_confs);
   while (getline(infile, line)) {
-    if (chars + line.length() > input_buf_size) {
+    if (chars == 0 && global_chars + line.length() > conf_size + CHARS) {
+      chars = global_chars;
+    }
+    if (global_chars + line.length() > input_buf_size) {
       break;
     }
-    memcpy(input_buf + chars, line.c_str(), line.length());
-    chars += line.length();
+    memcpy(input_buf + global_chars, line.c_str(), line.length());
+    global_chars += line.length();
   }
 
   uint8_t *combined_input = new uint8_t[chars * NUM_THREADS];
   for (uint32_t i = 0; i < NUM_THREADS; i++) {
-    memcpy(combined_input + i * chars, input_buf, chars);
+    memcpy(combined_input + i * chars, input_buf, conf_size);
+    memcpy(combined_input + i * chars + conf_size, input_buf + conf_size + i, chars - conf_size);
   }
 
-  uint8_t *output_buf = new uint8_t[CHARS];
+  uint8_t *output_buf = new uint8_t[chars];
   uint32_t output_count;
 
   uint8_t *output_dev, *input_dev;
   uint32_t *output_count_dev;
-  cudaSetDevice(1);
+  cudaSetDevice(0);
   cudaMalloc((void **) &output_dev, chars * NUM_THREADS);
   cudaMalloc((void **) &input_dev, chars * NUM_THREADS);
   cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS);
