@@ -156,16 +156,17 @@ void run(uint8_t *input, uint8_t num_seq_confs, uint8_t num_split_confs, uint32_
 
 int main(int argc, char **argv) {
   uint32_t CHARS = atoi(argv[1]);
+  uint32_t NUM_THREADS = atoi(argv[2]);
 
   // extracts "ad_id" and "ad_type"
   uint8_t seq_confs[] = {1, 34, 2, 97, 3, 100, 4, 95, 5, 105, 6, 100, 200, 34, 8, 121, 9, 112, 10, 101, 200, 34};
   uint8_t split_confs[] = {4, 7, 116};
 
-  ifstream infile("/Users/joseph/streaming-benchmarks/data/kafka-json.txt");
+  ifstream infile("kafka-json.txt");
   string line;
 
   uint32_t input_buf_size = sizeof(seq_confs) + sizeof(split_confs) + CHARS;
-  uint8_t *input_buf = new uint8_t[input_buf_size];
+  uint8_t *input_buf = new uint8_t[input_buf_size * NUM_THREADS];
   uint32_t chars = 0;
   memcpy(input_buf + chars, seq_confs, sizeof(seq_confs));
   chars += sizeof(seq_confs);
@@ -178,16 +179,23 @@ int main(int argc, char **argv) {
     memcpy(input_buf + chars, line.c_str(), line.length());
     chars += line.length();
   }
-  uint8_t *output_buf = new uint8_t[CHARS];
-  uint32_t output_count;
+  for (uint32_t i = 1; i < NUM_THREADS; i++) {
+    memcpy(input_buf + i * input_buf_size, input_buf, input_buf_size);
+  }
+  uint8_t *output_buf = new uint8_t[input_buf_size * NUM_THREADS];
+  uint32_t *output_count = new uint32_t[NUM_THREADS];
 
   struct timeval start, end, diff;
   gettimeofday(&start, 0);
-  run(input_buf, sizeof(seq_confs) / 2, sizeof(split_confs) / 3, chars, output_buf, &output_count);
+  #pragma omp parallel for
+  for (uint32_t i = 0; i < NUM_THREADS; i++) {
+    run(input_buf + input_buf_size * i, sizeof(seq_confs) / 2, sizeof(split_confs) / 3, chars,
+      output_buf + input_buf_size * i, output_count + i);
+  }
   gettimeofday(&end, 0);
   timersub(&end, &start, &diff);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
-  printf("%.2f MB/s, %d output tokens, random output byte: %d\n", chars / 1000000.0 / secs, output_count,
-    output_count == 0 ? 0 : output_buf[rand() % output_count]);
+  printf("%.2f MB/s, %d output tokens, random output byte: %d\n", (chars * NUM_THREADS) / 1000000.0 / secs,
+    output_count[0], output_count[0] == 0 ? 0 : output_buf[rand() % output_count[0]]);
   return 0;
 }
