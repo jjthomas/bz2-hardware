@@ -11,7 +11,7 @@ using namespace std;
 #define MAX_FIELD_CHARS 200
 #define MAX_FIELDS 10
 
-#define NUM_SMS 80
+#define NUM_SMS 110
 // must be power of two
 #define BLOCK_SIZE 256
 // must be power of two
