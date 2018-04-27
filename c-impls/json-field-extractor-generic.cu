@@ -78,7 +78,7 @@ __global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_spli
   for (uint8_t i = num_split_confs; i < MAX_FIELDS; i++) {
     split_trans[i] = (split_entry){0, 0, 0}; // need to zero-initialize since all entries checked below
   }
-  #define BUF_SIZE 64
+  #define BUF_SIZE 512
   uint8_t input[BUF_SIZE];
   uint8_t output[BUF_SIZE]; // it is possible that output is larger than input, but with fairly large BUF_SIZE
   // on the kafka_json dataset it shouldn't happen
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
   uint8_t *combined_input = new uint8_t[chars * NUM_THREADS];
   for (uint64_t i = 0; i < NUM_THREADS; i++) {
     memcpy(combined_input + i * chars, input_buf, conf_size);
-    memcpy(combined_input + i * chars + conf_size, input_buf + conf_size + i, chars - conf_size);
+    memcpy(combined_input + i * chars + conf_size, input_buf + conf_size + i * 10, chars - conf_size);
   }
 
   uint8_t *output_buf = new uint8_t[chars];
