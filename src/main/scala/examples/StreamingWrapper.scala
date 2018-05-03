@@ -609,17 +609,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           false.B)
       }
     }
-
-    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
-      // TODO this concat might not work, see above
-      printf(p"inputBuffer: 0x${Hexadecimal(io.inputMemBlocks(i))} for core " +
-        p"${curInputCore(i)##groupCounterInputBlock}, channel $i\n")
-    }
-    when (io.inputMemAddrReadys(i) && io.inputMemAddrValids(i)) {
-      // TODO this concat might not work, see above
-      printf(p"input address: 0x${Hexadecimal(io.inputMemAddrs(i))} accepted for core " +
-        p"${curInputCore(i)##groupCounterInputAddr}, channel $i\n")
-    }
   }
 
   val outputChannelsComplete = new Array[Bool](numOutputChannels)
@@ -708,17 +697,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize) &&
           (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
       }
-    }
-
-    when (io.outputMemBlockReadys(i) && io.outputMemBlockValids(i)) {
-      // TODO this concat might not work, see above
-      printf(p"outputBuffer: 0x${Hexadecimal(io.outputMemBlocks(i))} for core " +
-        p"${curOutputCore(i)##groupCounterOutputBlock}, channel $i\n")
-    }
-    when (io.outputMemAddrReadys(i) && io.outputMemAddrValids(i)) {
-      // TODO this concat might not work, see above
-      printf(p"output address: 0x${Hexadecimal(io.outputMemAddrs(i))} accepted for core " +
-        p"${curOutputCore(i)##groupCounterOutputAddr}, channel $i\n")
     }
   }
   var cumFinished = true.B
