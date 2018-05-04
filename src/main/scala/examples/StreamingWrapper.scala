@@ -301,8 +301,8 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
 
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
-                       outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int, wordSize: Int,
-                       val puFactory: (Int) => ProcessingUnit) extends Module {
+                       inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
+                       wordSize: Int, val puFactory: (Int) => ProcessingUnit) extends Module {
   val io = IO(new Bundle {
     val inputMemAddrs = Output(Vec(numInputChannels, UInt(64.W)))
     val inputMemAddrValids = Output(Vec(numInputChannels, Bool()))
@@ -325,6 +325,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   assert(numCores % numInputChannels == 0)
   assert((numCores / numInputChannels) % inputGroupSize == 0)
   assert(numCores >= 2 * inputGroupSize)
+  assert(inputNumReadAheadGroups >= 1)
+  assert(util.isPow2(inputNumReadAheadGroups))
+  assert(numCores / numInputChannels >= inputNumReadAheadGroups * inputGroupSize)
   assert(numCores % numOutputChannels == 0)
   assert((numCores / numOutputChannels) % outputGroupSize == 0)
   assert(numCores >= 2 * outputGroupSize)
@@ -338,7 +341,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val bramAddrsPerNativeLine = 512 / bramWidth
 
   val _cores = new Array[StreamingCore](numCores)
-  val curInputCore = new Array[UInt](numInputChannels)
+  val curInputAddrCore = new Array[UInt](numInputChannels)
+  val curInputDataCore = new Array[UInt](numInputChannels)
   val curOutputCore = new Array[UInt](numOutputChannels)
 
   def numCoresForInputChannel(channel: Int): Int = {
@@ -375,7 +379,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val cores = VecInit(_cores.map(_.io))
 
   for (i <- 0 until numInputChannels) {
-    curInputCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
+    curInputAddrCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
+      .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
+    curInputDataCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
       .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
   }
   for (i <- 0 until numOutputChannels) {
@@ -420,9 +426,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
               curInputMemAddr := curTreeLevel(i)(j)._1
               curInputMemAddrValid := curTreeLevel(i)(j)._2
             } else {
-              curInputMemAddr := Mux(curInputCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddr := Mux(curInputAddrCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._1, curTreeLevel(i)(j)._1)
-              curInputMemAddrValid := Mux(curInputCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
+              curInputMemAddrValid := Mux(curInputAddrCore(chan)(inputTreeLevel, inputTreeLevel) === 1.U,
                 curTreeLevel(i + 1)(j)._2, curTreeLevel(i)(j)._2)
             }
             newTreeLevel(i / 2)(j) = (curInputMemAddr, curInputMemAddrValid)
@@ -526,7 +532,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
     // required because valid may go from false to true during the processing of a group, and we
     // want to use only the valid value we originally saw when consuming the group's addresses
-    val inputMemAddrValid = RegInit(VecInit((0 until inputGroupSize).map(_ => false.B)))
+    val inputMemAddrValid = RegInit(VecInit((0 until inputGroupSize * inputNumReadAheadGroups).map(_ => false.B)))
     val inputBuffer = Reg(Vec(inputGroupSize, Vec(bramNumAddrs, UInt(bramWidth.W))))
     val inputBufferIdx = RegInit(VecInit((0 until inputGroupSize).map(_ => 0.asUInt(bramAddrBits.W))))
     val inputBufferValid = RegInit(VecInit((0 until inputGroupSize).map(_ => false.B)))
@@ -535,32 +541,72 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val groupCounterInputBlock = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
     val blocksComplete = RegInit(false.B)
     val nativeLineCounter = RegInit(0.asUInt(util.log2Ceil(Math.max(bramNumNativeLines, 2)).W))
-    val zerothCoreDelay = RegInit(false.B) // give zeroth core in group one cycle to produce valid address
+    val zerothCoreDelay = RegInit(false.B) // give zeroth core in group one cycle to write inputMemAddrValid
+    val addrReadAheadCounter = RegInit(0.asUInt(Math.max(1, util.log2Ceil(inputNumReadAheadGroups)).W))
+    val dataReadAheadCounter = RegInit(0.asUInt(Math.max(1, util.log2Ceil(inputNumReadAheadGroups)).W))
+    def inputMemAddrValidAtConst(c: Int, readAheadCounter: UInt): Bool = {
+      if (inputNumReadAheadGroups > 1) {
+        var result = inputMemAddrValid(c.U ## 0.asUInt(util.log2Ceil(inputNumReadAheadGroups).W))
+        for (i <- 1 until inputNumReadAheadGroups) {
+          result = Mux(readAheadCounter === i.U,
+            inputMemAddrValid(c.U ## i.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)), result)
+        }
+        result
+      } else {
+        inputMemAddrValid(c)
+      }
+    }
+    def writeInputMemAddrValidAtConst(c: Int, readAheadCounter: UInt, result: Bool): Unit = {
+      if (inputNumReadAheadGroups > 1) {
+        for (i <- 0 until inputNumReadAheadGroups) {
+          when(readAheadCounter === i.U) {
+            inputMemAddrValid(c.U ## i.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)) := result
+          }
+        }
+      } else {
+        inputMemAddrValid(c) := result
+      }
+    }
+    val curInputMemAddrValidAddr = if (inputNumReadAheadGroups > 1)
+      inputMemAddrValid(groupCounterInputAddr##addrReadAheadCounter) else inputMemAddrValid(groupCounterInputAddr)
+    val curInputMemAddrValidData = if (inputNumReadAheadGroups > 1)
+      inputMemAddrValid(groupCounterInputBlock##dataReadAheadCounter) else inputMemAddrValid(groupCounterInputBlock)
+
     when (treeCycleCounterInput === inputTreeLevel.U && !zerothCoreDelay) {
       zerothCoreDelay := true.B
     }
     for (j <- 0 until inputGroupSize) {
-      when(treeCycleCounterInput === inputTreeLevel.U && selInputMemAddrValid(i)(j) && !inputMemAddrValid(j) &&
-        (groupCounterInputAddr < j.U || !zerothCoreDelay)) {
-        inputMemAddrValid(j) := true.B
+      when(treeCycleCounterInput === inputTreeLevel.U && selInputMemAddrValid(i)(j) &&
+        !inputMemAddrValidAtConst(j, addrReadAheadCounter) && (groupCounterInputAddr < j.U || !zerothCoreDelay)) {
+        writeInputMemAddrValidAtConst(j, addrReadAheadCounter, true.B)
       }
     }
     io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
-    io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeLevel.U &&
-      inputMemAddrValid(groupCounterInputAddr) && !addrsComplete
+    io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeLevel.U && curInputMemAddrValidAddr && !addrsComplete
     io.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
     when ((io.inputMemAddrValids(i) && io.inputMemAddrReadys(i)) ||
-      (zerothCoreDelay && !inputMemAddrValid(groupCounterInputAddr))) {
+      (zerothCoreDelay && !addrsComplete && !curInputMemAddrValidAddr)) {
       when (groupCounterInputAddr === (inputGroupSize - 1).U) {
         addrsComplete := true.B
       } .otherwise {
         groupCounterInputAddr := groupCounterInputAddr + 1.U
       }
     }
+    val addrsAdvanceCond = if (inputNumReadAheadGroups > 1) addrReadAheadCounter + 1.U =/= dataReadAheadCounter else
+      blocksComplete && inputBufferValid.asUInt === 0.U
+    when (addrsComplete && addrsAdvanceCond) {
+      curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
+        (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
+      addrReadAheadCounter := addrReadAheadCounter + 1.U // wraps around
+      treeCycleCounterInput := 0.U
+      groupCounterInputAddr := 0.U
+      addrsComplete := false.B
+      zerothCoreDelay := false.B
+    }
     for (j <- 0 until inputGroupSize) {
       when(inputBufferValid(j)) {
         when(inputBufferIdx(j) === (bramNumAddrs - 1).U) {
-          inputMemAddrValid(j) := false.B
+          writeInputMemAddrValidAtConst(j, dataReadAheadCounter, false.B)
           inputBufferValid(j) := false.B
           inputBufferIdx(j) := 0.U
         }.otherwise {
@@ -578,19 +624,17 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       }
     }
     when (blocksComplete && inputBufferValid.asUInt === 0.U) {
-      curInputCore(i) := Mux(curInputCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-        (inputChannelBounds(i) / inputGroupSize).U, curInputCore(i) + 1.U)
-      treeCycleCounterInput := 0.U
+      curInputDataCore(i) := Mux(curInputDataCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
+        (inputChannelBounds(i) / inputGroupSize).U, curInputDataCore(i) + 1.U)
+      dataReadAheadCounter := dataReadAheadCounter + 1.U // wraps around
       groupCounterInputBlock := 0.U
-      groupCounterInputAddr := 0.U
-      addrsComplete := false.B
       blocksComplete := false.B
-      zerothCoreDelay := false.B
     }
     when ((io.inputMemBlockValids(i) && io.inputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
-      || (!inputMemAddrValid(groupCounterInputBlock) &&
-          (groupCounterInputBlock < groupCounterInputAddr || (addrsComplete && !blocksComplete)))) {
-      when (inputMemAddrValid(groupCounterInputBlock)) {
+      || (!curInputMemAddrValidData && !blocksComplete &&
+          (addrReadAheadCounter =/= dataReadAheadCounter || groupCounterInputBlock < groupCounterInputAddr ||
+            addrsComplete))) {
+      when (curInputMemAddrValidData) {
         inputBufferValid(groupCounterInputBlock) := true.B
       }
       when (groupCounterInputBlock === (inputGroupSize - 1).U) {
@@ -599,13 +643,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         groupCounterInputBlock := groupCounterInputBlock + 1.U
       }
     }
-    io.inputMemBlockReadys(i) :=
-      treeCycleCounterInput === inputTreeLevel.U && inputMemAddrValid(groupCounterInputBlock) && !blocksComplete
+    io.inputMemBlockReadys(i) := curInputMemAddrValidData && !blocksComplete
     for (j <- inputChannelBounds(i) / inputGroupSize until inputChannelBounds(i + 1) / inputGroupSize) {
       for (k <- j * inputGroupSize until (j + 1) * inputGroupSize) {
         cores(k).inputMemBlock := inputBuffer(k - j * inputGroupSize)(inputBufferIdx(k - j * inputGroupSize))
         cores(k).inputMemIdx := inputBufferIdx(k - j * inputGroupSize)
-        cores(k).inputMemBlockValid := Mux(curInputCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
+        cores(k).inputMemBlockValid := Mux(curInputDataCore(i) === j.U, inputBufferValid(k - j * inputGroupSize),
           false.B)
       }
     }
@@ -713,5 +756,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
 object StreamingWrapperDriver extends App {
   chisel3.Driver.execute(args, () => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L,
-    1000000000L, 1000000000L), 512, 16, 16, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)))
+    1000000000L, 1000000000L), 512, 16, 2, 16, 32, 32, 8, (coreId: Int) => new PassThrough(8, coreId)))
 }
