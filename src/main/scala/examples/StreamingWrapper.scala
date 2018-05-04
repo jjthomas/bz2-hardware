@@ -597,7 +597,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (addrsComplete && addrsAdvanceCond) {
       curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
         (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
-      addrReadAheadCounter := addrReadAheadCounter + 1.U // wraps around
+      if (inputNumReadAheadGroups > 1) {
+        addrReadAheadCounter := addrReadAheadCounter + 1.U // wraps around
+      }
       treeCycleCounterInput := 0.U
       groupCounterInputAddr := 0.U
       addrsComplete := false.B
@@ -626,7 +628,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (blocksComplete && inputBufferValid.asUInt === 0.U) {
       curInputDataCore(i) := Mux(curInputDataCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
         (inputChannelBounds(i) / inputGroupSize).U, curInputDataCore(i) + 1.U)
-      dataReadAheadCounter := dataReadAheadCounter + 1.U // wraps around
+      if (inputNumReadAheadGroups > 1) {
+        dataReadAheadCounter := dataReadAheadCounter + 1.U // wraps around
+      }
       groupCounterInputBlock := 0.U
       blocksComplete := false.B
     }
