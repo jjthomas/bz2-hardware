@@ -1,5 +1,6 @@
+package examples
+
 import chisel3._
-import examples.StreamingWrapperBase
 
 class BandwidthTest extends StreamingWrapperBase(4, 4) {
   val burstSize = 64
