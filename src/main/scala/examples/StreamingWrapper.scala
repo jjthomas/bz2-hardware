@@ -299,29 +299,38 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSi
   io.outputFinished := outputLengthSent && !outputAddressAccepted
 }
 
+class StreamingWrapperIO(numInputChannels: Int, numOutputChannels: Int) extends Bundle {
+  val inputMemAddrs = Output(Vec(numInputChannels, UInt(64.W)))
+  val inputMemAddrValids = Output(Vec(numInputChannels, Bool()))
+  val inputMemAddrLens = Output(Vec(numInputChannels, UInt(8.W)))
+  val inputMemAddrReadys = Input(Vec(numInputChannels, Bool()))
+  val inputMemBlocks = Input(Vec(numInputChannels, UInt(512.W)))
+  val inputMemBlockValids = Input(Vec(numInputChannels, Bool()))
+  val inputMemBlockReadys = Output(Vec(numInputChannels, Bool()))
+  val outputMemAddrs = Output(Vec(numOutputChannels, UInt(64.W)))
+  val outputMemAddrValids = Output(Vec(numOutputChannels, Bool()))
+  val outputMemAddrLens = Output(Vec(numOutputChannels, UInt(8.W)))
+  val outputMemAddrIds = Output(Vec(numOutputChannels, UInt(16.W)))
+  val outputMemAddrReadys = Input(Vec(numOutputChannels, Bool()))
+  val outputMemBlocks = Output(Vec(numOutputChannels, UInt(512.W)))
+  val outputMemBlockValids = Output(Vec(numOutputChannels, Bool()))
+  val outputMemBlockLasts = Output(Vec(numOutputChannels, Bool()))
+  val outputMemBlockReadys = Input(Vec(numOutputChannels, Bool()))
+  val finished = Output(Bool())
+
+  override def cloneType(): this.type =
+    new StreamingWrapperIO(numInputChannels, numOutputChannels).asInstanceOf[this.type]
+}
+
+class StreamingWrapperBase(numInputChannels: Int, numOutputChannels: Int) extends Module {
+  val io = IO(new StreamingWrapperIO(numInputChannels, numOutputChannels))
+}
+
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
                        inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
-                       wordSize: Int, val puFactory: (Int) => ProcessingUnit) extends Module {
-  val io = IO(new Bundle {
-    val inputMemAddrs = Output(Vec(numInputChannels, UInt(64.W)))
-    val inputMemAddrValids = Output(Vec(numInputChannels, Bool()))
-    val inputMemAddrLens = Output(Vec(numInputChannels, UInt(8.W)))
-    val inputMemAddrReadys = Input(Vec(numInputChannels, Bool()))
-    val inputMemBlocks = Input(Vec(numInputChannels, UInt(512.W)))
-    val inputMemBlockValids = Input(Vec(numInputChannels, Bool()))
-    val inputMemBlockReadys = Output(Vec(numInputChannels, Bool()))
-    val outputMemAddrs = Output(Vec(numOutputChannels, UInt(64.W)))
-    val outputMemAddrValids = Output(Vec(numOutputChannels, Bool()))
-    val outputMemAddrLens = Output(Vec(numOutputChannels, UInt(8.W)))
-    val outputMemAddrIds = Output(Vec(numOutputChannels, UInt(16.W)))
-    val outputMemAddrReadys = Input(Vec(numOutputChannels, Bool()))
-    val outputMemBlocks = Output(Vec(numOutputChannels, UInt(512.W)))
-    val outputMemBlockValids = Output(Vec(numOutputChannels, Bool()))
-    val outputMemBlockLasts = Output(Vec(numOutputChannels, Bool()))
-    val outputMemBlockReadys = Input(Vec(numOutputChannels, Bool()))
-    val finished = Output(Bool())
-  })
+                       wordSize: Int, val puFactory: (Int) => ProcessingUnit)
+                       extends StreamingWrapperBase(numInputChannels, numOutputChannels) {
   assert(numCores % numInputChannels == 0)
   assert((numCores / numInputChannels) % inputGroupSize == 0)
   assert(numCores >= 2 * inputGroupSize)
