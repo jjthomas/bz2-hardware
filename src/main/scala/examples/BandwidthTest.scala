@@ -2,7 +2,7 @@ package examples
 
 import chisel3._
 
-class BandwidthTest extends StreamingWrapperBase(4, 4) {
+class BandwidthTest(produceOutput: Boolean) extends StreamingWrapperBase(4, 4) {
   val burstSize = 64
   assert(util.isPow2(burstSize))
   assert(burstSize >= 2)
@@ -23,7 +23,7 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
     }
     io.inputMemAddrValids(i) := curInputAddrs(i) < inputAddrBound.U
     io.inputMemAddrLens(i) := (burstSize - 1).U
-    io.inputMemBlockReadys(i) := io.outputMemBlockReadys(i)
+    io.inputMemBlockReadys(i) := (if (produceOutput) io.outputMemBlockReadys(i) else true.B)
 
     io.outputMemAddrs(i) := curOutputAddrs(i)
     when (io.outputMemAddrReadys(i)) {
@@ -31,13 +31,15 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
         curOutputAddrs(i) := curOutputAddrs(i) + addrIncrement.U
       }
     }
-    io.outputMemAddrValids(i) := curOutputAddrs(i) < outputAddrBound.U
+    io.outputMemAddrValids(i) := (if (produceOutput) curOutputAddrs(i) < outputAddrBound.U else false.B)
     io.outputMemAddrLens(i) := (burstSize - 1).U
     io.outputMemAddrIds(i) := curOutputAddrs(i)(27, 12) // bottom 12 bits are always 0
     io.outputMemBlocks(i) := io.inputMemBlocks(i)
-    io.outputMemBlockValids(i) := io.inputMemBlockValids(i)
+    io.outputMemBlockValids(i) := (if (produceOutput) io.inputMemBlockValids(i) else false.B)
     io.outputMemBlockLasts(i) := outputLineCounters(i)(util.log2Ceil(burstSize) - 1, 0) === (burstSize - 1).U
-    when (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)) {
+    val outputIncrementCond = if (produceOutput) io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)
+      else io.inputMemBlockValids(i)
+    when (outputIncrementCond) {
       outputLineCounters(i) := outputLineCounters(i) + 1.U
     }
   }
@@ -49,5 +51,5 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
 }
 
 object BandwidthTestDriver extends App {
-  chisel3.Driver.execute(args, () => new BandwidthTest)
+  chisel3.Driver.execute(args, () => new BandwidthTest(true))
 }
