@@ -45,8 +45,8 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
       when(io.inputMemAddrReadys(i)) {
         when(curInputAddr + burstBytes =/= inputAddrBound.U) {
           val incrementedInputAddr = curInputAddr + addrIncrement
-          curInputAddr := Mux(incrementedInputAddr >= inputAddrBound.U, incrementedInputAddr - inputAddrBound.U,
-            incrementedInputAddr)
+          curInputAddr := Mux(incrementedInputAddr >= inputAddrBound.U,
+            incrementedInputAddr - inputAddrBound.U + burstBytes, incrementedInputAddr)
         } .otherwise {
           curInputAddr := curInputAddr + burstBytes
         }
@@ -59,8 +59,8 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
       when(io.outputMemAddrReadys(i)) {
         when(curOutputAddr + burstBytes =/= outputAddrBound.U) {
           val incrementedOutputAddr = curOutputAddr + addrIncrement
-          curOutputAddr := Mux(incrementedOutputAddr >= outputAddrBound.U, incrementedOutputAddr - outputAddrBound.U,
-            incrementedOutputAddr)
+          curOutputAddr := Mux(incrementedOutputAddr >= outputAddrBound.U,
+            incrementedOutputAddr - outputAddrBound.U + burstBytes, incrementedOutputAddr)
         } .otherwise {
           curOutputAddr := curOutputAddr + burstBytes
         }
