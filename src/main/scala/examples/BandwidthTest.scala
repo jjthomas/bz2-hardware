@@ -30,8 +30,8 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
       when (io.inputMemBlockValids(i)) {
         initialized := true.B
         var burstConverted = 0.U
-        for (i <- 1 until 7) {
-          burstConverted = Mux(io.inputMemBlocks(i)(2, 0) === i.U, ((1 << i) - 1).U, burstConverted)
+        for (j <- 1 until 7) {
+          burstConverted = Mux(io.inputMemBlocks(i)(2, 0) === j.U, ((1 << j) - 1).U, burstConverted)
         }
         burstSize := burstConverted
         addrIncrement := io.inputMemBlocks(i)(39, 8)
