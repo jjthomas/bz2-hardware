@@ -21,13 +21,13 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
     when (!initialized) {
       io.inputMemAddrs(i) := 0.U
       io.inputMemAddrValids(i) := !initAddrSent
-      when (io.inputMemAddrReadys(i)) {
+      when(io.inputMemAddrValids(i) && io.inputMemAddrReadys(i)) {
         initAddrSent := true.B
       }
       io.inputMemAddrLens(i) := 0.U
 
       io.inputMemBlockReadys(i) := true.B
-      when (io.inputMemBlockValids(i)) {
+      when(io.inputMemBlockValids(i) && io.inputMemBlockReadys(i)) {
         initialized := true.B
         burstSize := io.inputMemBlocks(i)(5, 0)
         addrIncrement := io.inputMemBlocks(i)(39, 8)
@@ -68,7 +68,7 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
       io.outputMemBlockValids(i) := Mux(produceOutput, io.inputMemBlockValids(i), false.B)
       io.outputMemBlockLasts(i) := (outputLineCounter + 1.U) & burstSize === 0.U
       val outputIncrementCond = Mux(produceOutput, io.outputMemBlockValids(i) && io.outputMemBlockReadys(i),
-        io.inputMemBlockValids(i))
+        io.inputMemBlockValids(i) && io.inputMemBlockReadys(i))
       when(outputIncrementCond) {
         outputLineCounter := outputLineCounter + 1.U
       }
