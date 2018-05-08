@@ -2,54 +2,86 @@ package examples
 
 import chisel3._
 
-class BandwidthTest(produceOutput: Boolean) extends StreamingWrapperBase(4, 4) {
-  val burstSize = 64
-  assert(util.isPow2(burstSize))
-  assert(burstSize >= 2)
-  val addrIncrement = 64 * burstSize
-  val outputStart = 1000000000 / addrIncrement * addrIncrement
+class BandwidthTest extends StreamingWrapperBase(4, 4) {
+  val outputStart = 536870912 // 2 ** 29
   val inputAddrBound = outputStart
   val outputAddrBound = outputStart + inputAddrBound
   val outputNumLines = inputAddrBound / 64
-  val curInputAddrs = (0 until 4).map(_ => RegInit(0.asUInt(32.W)))
-  val curOutputAddrs = (0 until 4).map(_ => RegInit(outputStart.asUInt(32.W)))
-  val outputLineCounters = (0 until 4).map(_ => RegInit(0.asUInt(util.log2Ceil(outputNumLines + 1).W)))
-  for (i <- 0 until 4) {
-    io.inputMemAddrs(i) := curInputAddrs(i)
-    when (io.inputMemAddrReadys(i)) {
-      when (curInputAddrs(i) < inputAddrBound.U) {
-        curInputAddrs(i) := curInputAddrs(i) + addrIncrement.U
-      }
-    }
-    io.inputMemAddrValids(i) := curInputAddrs(i) < inputAddrBound.U
-    io.inputMemAddrLens(i) := (burstSize - 1).U
-    io.inputMemBlockReadys(i) := (if (produceOutput) io.outputMemBlockReadys(i) else true.B)
-
-    io.outputMemAddrs(i) := curOutputAddrs(i)
-    when (io.outputMemAddrReadys(i)) {
-      when (curOutputAddrs(i) < outputAddrBound.U) {
-        curOutputAddrs(i) := curOutputAddrs(i) + addrIncrement.U
-      }
-    }
-    io.outputMemAddrValids(i) := (if (produceOutput) curOutputAddrs(i) < outputAddrBound.U else false.B)
-    io.outputMemAddrLens(i) := (burstSize - 1).U
-    io.outputMemAddrIds(i) := curOutputAddrs(i)(27, 12) // bottom 12 bits are always 0
-    io.outputMemBlocks(i) := io.inputMemBlocks(i)
-    io.outputMemBlockValids(i) := (if (produceOutput) io.inputMemBlockValids(i) else false.B)
-    io.outputMemBlockLasts(i) := outputLineCounters(i)(util.log2Ceil(burstSize) - 1, 0) === (burstSize - 1).U
-    val outputIncrementCond = if (produceOutput) io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)
-      else io.inputMemBlockValids(i)
-    when (outputIncrementCond) {
-      outputLineCounters(i) := outputLineCounters(i) + 1.U
-    }
-  }
   var finished = true.B
   for (i <- 0 until 4) {
-    finished = finished && (outputLineCounters(i) === outputNumLines.U)
+    val curInputAddr = RegInit(0.asUInt(32.W))
+    val curOutputAddr = RegInit(outputStart.asUInt(32.W))
+    val outputLineCounter = RegInit(0.asUInt(util.log2Ceil(outputNumLines + 1).W))
+    val initialized = RegInit(false.B)
+    val initAddrSent = RegInit(false.B)
+    val burstSize = Reg(UInt(util.log2Ceil(64).W))
+    val burstBytes = (burstSize + 1.U) ## 0.asUInt(6.W)
+    val addrIncrement = Reg(UInt(32.W))
+    val produceOutput = Reg(Bool())
+    when (!initialized) {
+      io.inputMemAddrs(i) := 0.U
+      io.inputMemAddrValids(i) := !initAddrSent
+      when (io.inputMemAddrReadys(i)) {
+        initAddrSent := true.B
+      }
+      io.inputMemAddrLens(i) := 0.U
+
+      io.inputMemBlockReadys(i) := true.B
+      when (io.inputMemBlockValids(i)) {
+        initialized := true.B
+        var burstConverted = 0.U
+        for (i <- 1 until 7) {
+          burstConverted = Mux(io.inputMemBlocks(i)(2, 0) === i.U, ((1 << i) - 1).U, burstConverted)
+        }
+        burstSize := burstConverted
+        addrIncrement := io.inputMemBlocks(i)(39, 8)
+        produceOutput := io.inputMemBlocks(i)(40, 40)
+      }
+
+      io.outputMemAddrValids(i) := false.B
+      io.outputMemBlockValids(i) := false.B
+    } .otherwise {
+      io.inputMemAddrs(i) := curInputAddr
+      when(io.inputMemAddrReadys(i)) {
+        when(curInputAddr + burstBytes =/= inputAddrBound.U) {
+          val incrementedInputAddr = curInputAddr + addrIncrement
+          curInputAddr := Mux(incrementedInputAddr >= inputAddrBound.U, incrementedInputAddr - inputAddrBound.U,
+            incrementedInputAddr)
+        } .otherwise {
+          curInputAddr := curInputAddr + burstBytes
+        }
+      }
+      io.inputMemAddrValids(i) := curInputAddr < inputAddrBound.U
+      io.inputMemAddrLens(i) := burstSize
+      io.inputMemBlockReadys(i) := Mux(produceOutput, io.outputMemBlockReadys(i), true.B)
+
+      io.outputMemAddrs(i) := curOutputAddr
+      when(io.outputMemAddrReadys(i)) {
+        when(curOutputAddr + burstBytes =/= outputAddrBound.U) {
+          val incrementedOutputAddr = curOutputAddr + addrIncrement
+          curOutputAddr := Mux(incrementedOutputAddr >= outputAddrBound.U, incrementedOutputAddr - outputAddrBound.U,
+            incrementedOutputAddr)
+        } .otherwise {
+          curOutputAddr := curOutputAddr + burstBytes
+        }
+      }
+      io.outputMemAddrValids(i) := Mux(produceOutput, curOutputAddr < outputAddrBound.U, false.B)
+      io.outputMemAddrLens(i) := burstSize
+      io.outputMemAddrIds(i) := 0.U
+      io.outputMemBlocks(i) := io.inputMemBlocks(i)
+      io.outputMemBlockValids(i) := Mux(produceOutput, io.inputMemBlockValids(i), false.B)
+      io.outputMemBlockLasts(i) := (outputLineCounter + 1.U) & burstSize === 0.U
+      val outputIncrementCond = Mux(produceOutput, io.outputMemBlockValids(i) && io.outputMemBlockReadys(i),
+        io.inputMemBlockValids(i))
+      when(outputIncrementCond) {
+        outputLineCounter := outputLineCounter + 1.U
+      }
+    }
+    finished = finished && (outputLineCounter === outputNumLines.U)
   }
   io.finished := finished
 }
 
 object BandwidthTestDriver extends App {
-  chisel3.Driver.execute(args, () => new BandwidthTest(true))
+  chisel3.Driver.execute(args, () => new BandwidthTest)
 }
