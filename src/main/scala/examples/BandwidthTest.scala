@@ -14,7 +14,7 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
     val outputLineCounter = RegInit(0.asUInt(util.log2Ceil(outputNumLines + 1).W))
     val initialized = RegInit(false.B)
     val initAddrSent = RegInit(false.B)
-    val burstSize = Reg(UInt(util.log2Ceil(64).W))
+    val burstSize = Reg(UInt(6.W))
     val burstBytes = (burstSize + 1.U) ## 0.asUInt(6.W)
     val addrIncrement = Reg(UInt(32.W))
     val produceOutput = Reg(Bool())
@@ -38,30 +38,30 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
       io.outputMemBlockValids(i) := false.B
     } .otherwise {
       io.inputMemAddrs(i) := curInputAddr
-      when(io.inputMemAddrReadys(i)) {
+      io.inputMemAddrValids(i) := curInputAddr =/= inputAddrBound.U
+      when(io.inputMemAddrValids(i) && io.inputMemAddrReadys(i)) {
         when(curInputAddr + burstBytes =/= inputAddrBound.U) {
           val incrementedInputAddr = curInputAddr + addrIncrement
           curInputAddr := Mux(incrementedInputAddr >= inputAddrBound.U,
             incrementedInputAddr - inputAddrBound.U + burstBytes, incrementedInputAddr)
         } .otherwise {
-          curInputAddr := curInputAddr + burstBytes
+          curInputAddr := inputAddrBound.U
         }
       }
-      io.inputMemAddrValids(i) := curInputAddr < inputAddrBound.U
       io.inputMemAddrLens(i) := burstSize
       io.inputMemBlockReadys(i) := Mux(produceOutput, io.outputMemBlockReadys(i), true.B)
 
       io.outputMemAddrs(i) := curOutputAddr
-      when(io.outputMemAddrReadys(i)) {
+      io.outputMemAddrValids(i) := Mux(produceOutput, curOutputAddr =/= outputAddrBound.U, false.B)
+      when(io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) {
         when(curOutputAddr + burstBytes =/= outputAddrBound.U) {
           val incrementedOutputAddr = curOutputAddr + addrIncrement
           curOutputAddr := Mux(incrementedOutputAddr >= outputAddrBound.U,
             incrementedOutputAddr - outputAddrBound.U + burstBytes, incrementedOutputAddr)
         } .otherwise {
-          curOutputAddr := curOutputAddr + burstBytes
+          curOutputAddr := outputAddrBound.U
         }
       }
-      io.outputMemAddrValids(i) := Mux(produceOutput, curOutputAddr < outputAddrBound.U, false.B)
       io.outputMemAddrLens(i) := burstSize
       io.outputMemAddrIds(i) := 0.U
       io.outputMemBlocks(i) := io.inputMemBlocks(i)
