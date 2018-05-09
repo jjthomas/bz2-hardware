@@ -10,7 +10,7 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
     val outputAddrBound = outputStart ## 0.asUInt(1.W)
     val outputNumLines = inputAddrBound(30, 6) // divide by 64
     val curInputAddr = RegInit(0.asUInt(32.W))
-    val curOutputAddr = RegInit(UInt(31.W))
+    val curOutputAddr = RegInit(0.asUInt(31.W))
     val outputLineCounter = RegInit(0.asUInt(26.W)) // enough bits to store outputNumLines + 1
     val initialized = RegInit(false.B)
     val initAddrSent = RegInit(false.B)
