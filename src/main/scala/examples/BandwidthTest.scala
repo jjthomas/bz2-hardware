@@ -5,7 +5,7 @@ import chisel3._
 class BandwidthTest extends StreamingWrapperBase(4, 4) {
   var finished = true.B
   for (i <- 0 until 4) {
-    val outputStart = Reg(536870912.asUInt(31.W)) // initialized so that finished is not immediately asserted
+    val outputStart = RegInit(536870912.asUInt(31.W)) // initialized so that finished is not immediately asserted
     val inputAddrBound = outputStart
     val outputAddrBound = outputStart ## 0.asUInt(1.W)
     val outputNumLines = inputAddrBound(30, 6) // divide by 64
