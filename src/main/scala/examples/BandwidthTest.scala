@@ -5,12 +5,12 @@ import chisel3._
 class BandwidthTest extends StreamingWrapperBase(4, 4) {
   var finished = true.B
   for (i <- 0 until 4) {
-    val outputStart = Reg(UInt(31.W))
+    val outputStart = Reg(536870912.asUInt(31.W)) // initialized so that finished is not immediately asserted
     val inputAddrBound = outputStart
     val outputAddrBound = outputStart ## 0.asUInt(1.W)
     val outputNumLines = inputAddrBound(30, 6) // divide by 64
     val curInputAddr = RegInit(0.asUInt(32.W))
-    val curOutputAddr = RegInit(0.asUInt(31.W))
+    val curOutputAddr = Reg(UInt(31.W))
     val outputLineCounter = RegInit(0.asUInt(26.W)) // enough bits to store outputNumLines + 1
     val initialized = RegInit(false.B)
     val initAddrSent = RegInit(false.B)
@@ -33,6 +33,7 @@ class BandwidthTest extends StreamingWrapperBase(4, 4) {
         addrIncrement := io.inputMemBlocks(i)(39, 8)
         produceOutput := io.inputMemBlocks(i)(40, 40)
         outputStart := io.inputMemBlocks(i)(94, 64)
+        curOutputAddr := io.inputMemBlocks(i)(94, 64)
       }
 
       io.outputMemAddrValids(i) := false.B
