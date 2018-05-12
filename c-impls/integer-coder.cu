@@ -34,16 +34,16 @@ typedef struct {
   uint8_t cost; // may not be large enough at larger batch size
 } cost_info;
 
-static inline uint8_t bit_length(uint32_t word) {
-  return word == 0 ? 1 : WORD_SIZE - __builtin_clz(word);
+__device__ uint8_t bit_length(uint32_t word) {
+  return word == 0 ? 1 : WORD_SIZE - __clz(word);
 }
 
-static inline uint32_t bit_select(uint32_t word, uint32_t upper, uint32_t lower) {
+__device__ uint32_t bit_select(uint32_t word, uint32_t upper, uint32_t lower) {
   uint32_t num_bits = upper - lower + 1;
   return (word >> lower) & ((1L << num_bits) - 1);
 }
 
-static inline cost_info compute_cost(uint8_t width, uint8_t bit_count[3]) {
+__device__ cost_info compute_cost(uint8_t width, uint8_t bit_count[3]) {
   uint8_t num_exceptions = BATCH_SIZE - bit_count[0];
   uint8_t fixed_cost = LG_WORD_SIZE + num_exceptions * bit_count[1];
   uint8_t varint_cost = bit_count[2]; // will be 0 if there are no exceptions
@@ -52,13 +52,13 @@ static inline cost_info compute_cost(uint8_t width, uint8_t bit_count[3]) {
     common_exception_cost + (fixed_cost <= varint_cost ? fixed_cost : varint_cost)};
 }
 
-__global__ void run(uint8_t *input_full, uint32_t input_count, uint8_t *output_full, uint32_t *output_count) {
+__global__ void run(uint32_t *input_full, uint32_t input_count, uint32_t *output_full, uint32_t *output_count) {
   uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  uint8_t *input_buf = input_full + index * input_count;
-  uint8_t *output_buf = output_full + index * 2 * input_count;
+  uint32_t *input_buf = input_full + index * input_count;
+  uint32_t *output_buf = output_full + index * 2 * input_count;
 
   uint32_t input_idx = 0;
-  uint32_t output_idx = 0;
+  uint32_t output_buf_idx = 0;
   uint32_t out_buf = 0;
   uint8_t out_buf_bits = 0;
   uint8_t bits_to_varint_len[33];
@@ -77,8 +77,8 @@ __global__ void run(uint8_t *input_full, uint32_t input_count, uint8_t *output_f
   }
 
   #define BUF_SIZE 256
-  uint8_t input[BUF_SIZE];
-  uint8_t output[BUF_SIZE * 2];
+  uint32_t input[BUF_SIZE];
+  uint32_t output[BUF_SIZE * 2];
   for (uint32_t ii = input_idx; ii < input_count; ii += BUF_SIZE) {
     for (uint32_t i = ii; i < MIN(input_count, ii + BUF_SIZE); i++) {
       input[i - ii] = input_buf[i];
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
   cudaMemcpy(output_buf, output_dev, output_count / 4, cudaMemcpyDeviceToHost);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
   printf("%.2f MB/s, %d input tokens, %d output tokens, random output byte: %d\n",
-    (chars * NUM_THREADS) / 1000000.0 / secs, chars / 4, output_count,
+    (chars * NUM_THREADS) / 1000000.0 / secs, (int) chars / 4, output_count,
     output_count == 0 ? 0 : output_buf[rand() % (output_count * 4)]);
   return 0;
 }
