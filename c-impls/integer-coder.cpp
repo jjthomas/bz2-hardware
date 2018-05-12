@@ -173,24 +173,25 @@ int main(int argc, char **argv) {
     memcpy(input_buf + chars, line.c_str(), line.length());
     chars += line.length();
   }
+  chars = chars / 4 * 4;
   for (uint32_t i = 1; i < NUM_THREADS; i++) {
-    memcpy(input_buf + i * input_buf_size, input_buf, input_buf_size);
+    memcpy(input_buf + i * chars, input_buf, chars);
   }
-  uint8_t *output_buf = new uint8_t[input_buf_size * 2 * NUM_THREADS];
+  uint8_t *output_buf = new uint8_t[chars * 2 * NUM_THREADS];
   uint32_t *output_count = new uint32_t[NUM_THREADS];
 
   struct timeval start, end, diff;
   gettimeofday(&start, 0);
   #pragma omp parallel for
   for (uint32_t i = 0; i < NUM_THREADS; i++) {
-    run((uint32_t *)(input_buf + input_buf_size * i), input_buf_size / 4,
-      (uint32_t *)(output_buf + input_buf_size * 2 * i), output_count + i);
+    run((uint32_t *)(input_buf + chars * i), chars / 4,
+      (uint32_t *)(output_buf + chars * 2 * i), output_count + i);
   }
   gettimeofday(&end, 0);
   timersub(&end, &start, &diff);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
   printf("%.2f MB/s, %d input tokens, %d output tokens, random output byte: %d\n",
-    (input_buf_size * NUM_THREADS) / 1000000.0 / secs, input_buf_size / 4,
+    (chars * NUM_THREADS) / 1000000.0 / secs, chars / 4,
     output_count[0], output_count[0] == 0 ? 0 : output_buf[rand() % (output_count[0] * 4)]);
   return 0;
 }
