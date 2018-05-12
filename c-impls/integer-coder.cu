@@ -210,6 +210,11 @@ int main(int argc, char **argv) {
   uint8_t *combined_input = new uint8_t[chars * NUM_THREADS];
   for (uint64_t i = 0; i < NUM_THREADS; i++) {
     memcpy(combined_input + i * chars, input_buf + i * 10, chars);
+    uint32_t mask = (1L << (i % 33)) - 1;
+    uint32_t *slice = (uint32_t *)(combined_input + i * chars);
+    for (uint32_t j = 0; j < chars / 4; j++) {
+      slice[j] = slice[j] & mask;
+    }
   }
 
   uint8_t *output_buf = new uint8_t[chars * 2];
