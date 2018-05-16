@@ -54,8 +54,8 @@ __global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_spli
 
   uint8_t state_stack[MAX_DEPTH];
   uint8_t stack_ptr = 0;
-  seq_entry seq_trans[MAX_FIELD_CHARS];
-  split_entry split_trans[MAX_FIELDS];
+  __shared__ seq_entry seq_trans[MAX_FIELD_CHARS];
+  __shared__ split_entry split_trans[MAX_FIELDS];
 
   #define IS_WHITESPACE(c) ((c) == ' ' || (c) == '\n' || (c) == '\t')
   #define POP_STATE_STACK do {\
@@ -66,18 +66,22 @@ __global__ void run(uint8_t *input_full, uint8_t num_seq_confs, uint8_t num_spli
           } while (0)
 
 
-  // match_states are exactly 8 bits only when MAX_FIELD_CHARS is >= 127
-  for (uint8_t i = 0; i < num_seq_confs; i++) {
-    seq_trans[i] = (seq_entry){input_buf[input_idx], input_buf[input_idx + 1]};
-    input_idx += 2;
+  if (threadIdx.x == 0) {
+    // match_states are exactly 8 bits only when MAX_FIELD_CHARS is >= 127
+    for (uint8_t i = 0; i < num_seq_confs; i++) {
+      seq_trans[i] = (seq_entry){input_buf[input_idx], input_buf[input_idx + 1]};
+      input_idx += 2;
+    }
+    for (uint8_t i = 0; i < num_split_confs; i++) {
+      split_trans[i] = (split_entry){input_buf[input_idx], input_buf[input_idx + 1], input_buf[input_idx + 2]};
+      input_idx += 3;
+    }
+    for (uint8_t i = num_split_confs; i < MAX_FIELDS; i++) {
+      split_trans[i] = (split_entry){0, 0, 0}; // need to zero-initialize since all entries checked below
+    }
   }
-  for (uint8_t i = 0; i < num_split_confs; i++) {
-    split_trans[i] = (split_entry){input_buf[input_idx], input_buf[input_idx + 1], input_buf[input_idx + 2]};
-    input_idx += 3;
-  }
-  for (uint8_t i = num_split_confs; i < MAX_FIELDS; i++) {
-    split_trans[i] = (split_entry){0, 0, 0}; // need to zero-initialize since all entries checked below
-  }
+  __syncthreads();
+
   #define BUF_SIZE 512
   uint8_t input[BUF_SIZE];
   uint8_t output[BUF_SIZE]; // it is possible that output is larger than input, but with fairly large BUF_SIZE
