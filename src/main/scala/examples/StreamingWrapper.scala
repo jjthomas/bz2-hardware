@@ -422,16 +422,19 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     inputTreeLevel = 0
     while (curTreeLevel.length > 1) {
       val newTreeLevel = new Array[Array[(UInt, Bool, Bool)]](curTreeLevel.length / 2)
+      var levelHasReg = false
       for (i <- 0 until curTreeLevel.length by 2) {
+        val needReg = curTreeLevel(i) != null && curTreeLevel(i + 1) != null
+        levelHasReg = levelHasReg || needReg
         if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
           newTreeLevel(i / 2) = null
         } else {
           newTreeLevel(i / 2) = new Array[(UInt, Bool, Bool)](inputGroupSize)
           for (j <- 0 until inputGroupSize) {
             // TODO make use of registers configurable (e.g. every other tree level, every 4, etc.)
-            val curInputMemAddr = Reg(UInt(32.W))
-            val curInputMemAddrValid = Reg(Bool())
-            val curInputMemAddrsFinished = Reg(Bool())
+            val curInputMemAddr = if (needReg) Reg(UInt(32.W)) else Wire(UInt(32.W))
+            val curInputMemAddrValid = if (needReg) Reg(Bool()) else Wire(Bool())
+            val curInputMemAddrsFinished = if (needReg) Reg(Bool()) else Wire(Bool())
             if (curTreeLevel(i) == null) {
               curInputMemAddr := curTreeLevel(i + 1)(j)._1
               curInputMemAddrValid := curTreeLevel(i + 1)(j)._2
@@ -453,7 +456,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         }
       }
       curTreeLevel = newTreeLevel
-      inputTreeLevel += 1
+      if (levelHasReg) {
+        inputTreeLevel += 1
+      }
     }
     selInputMemAddr(chan) = VecInit(curTreeLevel(0).map(_._1))
     selInputMemAddrValid(chan) = VecInit(curTreeLevel(0).map(_._2))
@@ -488,6 +493,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     outputTreeLevel = 0
     while (curTreeLevel.length > 1) {
       val newTreeLevel = new Array[Array[(UInt, Bool, Bool, UInt, UInt, Bool)]](curTreeLevel.length / 2)
+      // TODO can apply same reg/level skipping optimization as in input tree
       for (i <- 0 until curTreeLevel.length by 2) {
         if (curTreeLevel(i) == null && curTreeLevel(i + 1) == null) {
           newTreeLevel(i / 2) = null
@@ -547,7 +553,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   // makes sure there are enough cycles between that change and the unsetting of inputMemAddrProcessed at
   // idx = bramNumAddrs - 1 for the new addresses to be visible
   for (i <- 0 until numInputChannels) {
-    val treeCycleCounterInput = RegInit(0.asUInt(util.log2Ceil(inputTreeLevel + 1).W))
+    val treeCycleCounterInput = RegInit(0.asUInt(Math.max(1, util.log2Ceil(inputTreeLevel + 1)).W))
     val inputMemAddrProcessed = RegInit(VecInit((0 until inputGroupSize * inputNumReadAheadGroups).map(_ => false.B)))
     val inputMemAddrValid = RegInit(VecInit((0 until inputGroupSize * inputNumReadAheadGroups).map(_ => false.B)))
     val inputBuffer = Reg(Vec(inputGroupSize, Vec(bramNumAddrs, UInt(bramWidth.W))))
