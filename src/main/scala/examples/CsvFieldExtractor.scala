@@ -3,7 +3,7 @@ package examples
 import chisel3.util
 import language._
 
-class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends ProcessingUnit(8, coreId) {
+class CsvFieldExtractor(numFields: Int, targetField: Int, coreId: Int) extends ProcessingUnit(8, 8, coreId) {
   val curField = NewStreamReg(util.log2Ceil(numFields), 0)
   val inQuote = NewStreamReg(1, false)
   val lastChar = NewStreamReg(8, ' '.toInt)

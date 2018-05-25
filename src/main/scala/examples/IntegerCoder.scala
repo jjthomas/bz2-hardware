@@ -142,13 +142,12 @@ object IntegerCoder {
 }
 
 class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId: Int)
-  extends ProcessingUnit(8, coreId) {
+  extends ProcessingUnit(wordSize, 8, coreId) {
   assert(wordSize % 8 == 0)
   assert(wordSize <= 64)
   assert(util.isPow2(bitWidths.length))
   val wordBytes = wordSize / 8
   val wordIdx = NewStreamReg(util.log2Ceil(batchWords + 1), 0)
-  val byteIdx = NewStreamReg(Math.max(util.log2Ceil(wordBytes), 1), 0)
   val curWord = NewStreamReg(wordSize, 0)
 
   val maxVarIntBits = (wordSize + 7 - 1) / 7 * 8
@@ -291,38 +290,26 @@ class IntegerCoder(wordSize: Int, batchWords: Int, bitWidths: Array[Int], coreId
     }
   }
 
-  val finalInputWord = if (wordSize > 8) StreamInput ## curWord(8 * (wordBytes - 1) - 1, 0) else StreamInput
   val bufWord = buffer(wordIdx)
-  val curLeadingZeros = leadingZeros(StreamMux(curState === READ_INPUT.id.L, finalInputWord, bufWord))
+  val curLeadingZeros = leadingZeros(StreamMux(curState === READ_INPUT.id.L, StreamInput, bufWord))
   val curBitLen = wordSize.L - curLeadingZeros
   swhen(curState === READ_INPUT.id.L) {
-    for (i <- 0 until wordBytes - 1) {
-      swhen(byteIdx === i.L) {
-        curWord := (if (i == 0) curWord(8 * wordBytes - 1, 8) ## StreamInput
-        else curWord(8 * wordBytes - 1, 8 * (i + 1)) ## StreamInput ## curWord(8 * i - 1, 0))
-      }
+    buffer(wordIdx) := StreamInput
+    swhen(wordIdx === (batchWords - 1).L) {
+      wordIdx := 0.L
+      curState := SAVE_BEST_WIDTH.id.L
+    }.otherwise {
+      wordIdx := wordIdx + 1.L
     }
-    swhen(byteIdx === (wordBytes - 1).L) {
-      buffer(wordIdx) := finalInputWord
-      byteIdx := 0.L
-      swhen(wordIdx === (batchWords - 1).L) {
-        wordIdx := 0.L
-        curState := SAVE_BEST_WIDTH.id.L
+    for ((w, i) <- bitWidths.zipWithIndex) {
+      swhen(curBitLen <= w.L) {
+        bitCounts(i)._1 := bitCounts(i)._1 + 1.L
       }.otherwise {
-        wordIdx := wordIdx + 1.L
-      }
-      for ((w, i) <- bitWidths.zipWithIndex) {
-        swhen(curBitLen <= w.L) {
-          bitCounts(i)._1 := bitCounts(i)._1 + 1.L
-        }.otherwise {
-          swhen(curBitLen > bitCounts(i)._2) {
-            bitCounts(i)._2 := curBitLen
-          }
-          bitCounts(i)._3 := bitCounts(i)._3 + lzToVarIntBits(curLeadingZeros)
+        swhen(curBitLen > bitCounts(i)._2) {
+          bitCounts(i)._2 := curBitLen
         }
+        bitCounts(i)._3 := bitCounts(i)._3 + lzToVarIntBits(curLeadingZeros)
       }
-    } .otherwise {
-      byteIdx := byteIdx + 1.L
     }
   } .otherwise {
     swhile(wordIdx <= batchWords.L) { // any logic that does not directly process an input token (i.e. all logic

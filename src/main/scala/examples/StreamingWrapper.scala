@@ -3,8 +3,7 @@ package examples
 import chisel3._
 import chisel3.core.{Reg, Bundle, Module}
 
-class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (Int) => ProcessingUnit,
-                coreId: Int) extends Module {
+class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val bramLineSize = bramWidth * bramNumAddrs
   val io = IO(new Bundle {
@@ -20,9 +19,13 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
     val outputBits = Output(UInt(util.log2Ceil(bramLineSize + 1).W))
     val outputFinished = Output(Bool())
   })
-  assert(wordBits <= bramWidth)
-  assert(bramWidth % wordBits == 0)
   val inner = Module(puFactory(coreId))
+  val inputWordBits = inner.inputWordSize
+  val outputWordBits = inner.outputWordSize
+  assert(inputWordBits <= bramWidth)
+  assert(bramWidth % inputWordBits == 0)
+  assert(outputWordBits <= bramWidth)
+  assert(bramWidth % outputWordBits == 0)
 
   // TODO this does not need to be coupled with the bramWidth (same with outputMemBlock)
   // TODO why do we need this register block at all? Just directly select the output from the BRAM
@@ -53,9 +56,9 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   // inputPieceBitsRemaining === 0.U is true at the start and end of the reading of a block, here
   // we ensure that we capture it only in the start case
   when ((inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) ||
-        (inner.io.inputValid && inner.io.inputReady && ((inputPieceBitsRemaining - wordBits.U) === 0.U))) {
+        (inner.io.inputValid && inner.io.inputReady && ((inputPieceBitsRemaining - inputWordBits.U) === 0.U))) {
     val newInputBitsRemaining = Mux(inputPieceBitsRemaining === 0.U, inputBitsRemaining,
-      inputBitsRemaining - wordBits.U)
+      inputBitsRemaining - inputWordBits.U)
     inputPieceBitsRemaining := Mux(newInputBitsRemaining < bramWidth.U, newInputBitsRemaining, bramWidth.U)
     inputBitsRemaining := newInputBitsRemaining
     inputReadAddr := Mux(newInputBitsRemaining === 0.U, inputReadAddr, inputReadAddr + 1.U)
@@ -66,15 +69,15 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   } .otherwise {
     inputReadAddrFinal := inputReadAddr
   }
-  when (inner.io.inputValid && inner.io.inputReady && !((inputPieceBitsRemaining - wordBits.U) === 0.U)) {
-    inputPieceBitsRemaining := inputPieceBitsRemaining - wordBits.U
-    inputBitsRemaining := inputBitsRemaining - wordBits.U
-    for (i <- 0 until (bramWidth - wordBits)) {
-      inputMemBlock(i) := inputMemBlock(i + wordBits)
+  when (inner.io.inputValid && inner.io.inputReady && !((inputPieceBitsRemaining - inputWordBits.U) === 0.U)) {
+    inputPieceBitsRemaining := inputPieceBitsRemaining - inputWordBits.U
+    inputBitsRemaining := inputBitsRemaining - inputWordBits.U
+    for (i <- 0 until (bramWidth - inputWordBits)) {
+      inputMemBlock(i) := inputMemBlock(i + inputWordBits)
     }
   }
 
-  val nextWord = inputMemBlock.asUInt()(wordBits - 1, 0)
+  val nextWord = inputMemBlock.asUInt()(inputWordBits - 1, 0)
   inner.io.inputValid := !(inputPieceBitsRemaining === 0.U)
   inner.io.inputFinished := io.inputFinished && inputBitsRemaining === 0.U
   inner.io.inputWord := nextWord
@@ -82,16 +85,16 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, wordBits: Int, puFactory: (In
   // outputValid must be asserted on the same cycle as inputValid if that input triggered the output
   when ((inner.io.outputValid && inner.io.outputReady) || (inner.io.outputFinished && outputPieceBits > 0.U &&
     outputPieceBits < bramWidth.U)) {
-    for (i <- 0 until wordBits) {
-      outputMemBlock(bramWidth - 1 - i) := inner.io.outputWord(wordBits - 1 - i)
+    for (i <- 0 until outputWordBits) {
+      outputMemBlock(bramWidth - 1 - i) := inner.io.outputWord(outputWordBits - 1 - i)
     }
-    for (i <- 0 until (bramWidth - wordBits)) {
-      outputMemBlock(i) := outputMemBlock(i + wordBits)
+    for (i <- 0 until (bramWidth - outputWordBits)) {
+      outputMemBlock(i) := outputMemBlock(i + outputWordBits)
     }
-    outputPieceBits := Mux(outputPieceBits === bramWidth.U, wordBits.U, outputPieceBits + wordBits.U)
+    outputPieceBits := Mux(outputPieceBits === bramWidth.U, outputWordBits.U, outputPieceBits + outputWordBits.U)
     outputWriteAddr := Mux(outputPieceBits === bramWidth.U, outputWriteAddr + 1.U, outputWriteAddr)
     when (inner.io.outputValid) {
-      outputBits := outputBits + wordBits.U
+      outputBits := outputBits + outputWordBits.U
     }
   }
 
@@ -152,13 +155,13 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
-class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, wordSize: Int,
-                    puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
+class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit,
+                    coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val bramLineSize = bramWidth * bramNumAddrs
   val bytesInLine = bramLineSize / 8
   val io = IO(new StreamingCoreIO(bramWidth, bramNumAddrs))
-  val core = Module(new InnerCore(bramWidth, bramNumAddrs, wordSize, puFactory, coreId))
+  val core = Module(new InnerCore(bramWidth, bramNumAddrs, puFactory, coreId))
 
   val isInit = RegInit(true.B)
   val initDone = RegInit(false.B)
@@ -332,7 +335,7 @@ class StreamingWrapperBase(numInputChannels: Int, numOutputChannels: Int) extend
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
                        inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
-                       wordSize: Int, val puFactory: (Int) => ProcessingUnit)
+                       val puFactory: (Int) => ProcessingUnit)
                        extends StreamingWrapperBase(numInputChannels, numOutputChannels) {
   assert(numCores % numInputChannels == 0)
   assert(numCores >= 2 * inputGroupSize)
@@ -384,7 +387,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       curOutputChannel += 1
     }
     _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * bytesInLine, bramWidth, bramNumAddrs, wordSize, puFactory, i))
+      (i - inputChannelBounds(curInputChannel)) * bytesInLine, bramWidth, bramNumAddrs, puFactory, i))
   }
 
   val cores = VecInit(_cores.map(_.io))
@@ -758,5 +761,5 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
 object StreamingWrapperDriver extends App {
   chisel3.Driver.execute(args, () => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L,
-    1000000000L, 1000000000L), 512, 16, 2, 16, 32, 32, 8, (coreId: Int) => new PassThrough(8, coreId)))
+    1000000000L, 1000000000L), 512, 16, 2, 16, 32, 32, (coreId: Int) => new PassThrough(8, coreId)))
 }

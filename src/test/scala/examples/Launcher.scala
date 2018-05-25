@@ -148,7 +148,7 @@ object Launcher {
       },
       "StreamingWrapper1" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 63).map(j => (i + j).toChar))).toArray
@@ -158,7 +158,7 @@ object Launcher {
       },
       "StreamingWrapper2" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 65).map(j => (i + j).toChar))).toArray
@@ -168,7 +168,7 @@ object Launcher {
       },
       "StreamingWrapper3" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(2, Array(0L, 0L), 2, Array(1000000000L, 1000000000L),
-          8, 2, 2, 2, 16, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          8, 2, 2, 2, 16, 32, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 8).map(i => String.valueOf((0 until 67).map(j => (i + j).toChar))).toArray
@@ -178,7 +178,7 @@ object Launcher {
       },
       "StreamingWrapper4" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 16, (coreId: Int) => new PassThrough(16, coreId)),
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) => new PassThrough(16, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 62).map(j => (i + j).toChar))).toArray
@@ -188,7 +188,7 @@ object Launcher {
       },
       "StreamingWrapper5" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 32, 32, 8, (coreId: Int) => new PassThrough(8, coreId)),
+          1000000000L), 4, 1, 1, 1, 32, 32, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar))).toArray
@@ -199,7 +199,7 @@ object Launcher {
       },
       "StreamingWrapper6" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) => new CsvFieldExtractor(2, 0, coreId)),
           backendName) {
           (c) => {
             val inputs = Array("1111\"2,2\",21112\n1,2", "1,21112", "111,21112", "11,21112")
@@ -211,7 +211,7 @@ object Launcher {
       },
       "StreamingWrapper7" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) =>
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) =>
           new JsonFieldExtractorSpecific(Array(Array("a", "b"), Array("a", "d"), Array("x")), 2, coreId)),
           backendName) {
           (c) => {
@@ -229,7 +229,7 @@ object Launcher {
       },
       "StreamingWrapper8" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) =>
+          1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) =>
           new JsonFieldExtractorGeneric(100, 3, 2, coreId)), backendName) {
           (c) => {
             val fields = Array(Array("a", "b"), Array("a", "d"), Array("x"))
@@ -250,7 +250,7 @@ object Launcher {
       },
       "StreamingWrapper9" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
-          1000000000L), 4, 1, 1, 1, 16, 32, 8, (coreId: Int) =>
+          1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) =>
           new IntegerCoder(32, 4, Array(1, 6, 11, 16), coreId)), backendName) {
           (c) => {
             val seed = 2956547051745311985L

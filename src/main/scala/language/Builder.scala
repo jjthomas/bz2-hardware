@@ -21,7 +21,6 @@ object Builder {
 }
 
 class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, coreId: Int) {
-  require(inputWidth == outputWidth, "circuit inputWidth must equal outputWidth for now")
   val context = new ArrayBuffer[StreamWhenContext]
 
   // semantics for reg is single write per tick, arbitrary number of reads
