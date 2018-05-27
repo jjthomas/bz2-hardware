@@ -338,10 +338,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
                        val puFactory: (Int) => ProcessingUnit)
                        extends StreamingWrapperBase(numInputChannels, numOutputChannels) {
   assert(numCores % numInputChannels == 0)
+  assert((numCores / numInputChannels) % inputGroupSize == 0)
   assert(numCores >= 2 * inputGroupSize)
   assert(inputNumReadAheadGroups >= 1)
   assert(util.isPow2(inputNumReadAheadGroups))
-  assert((numCores / numInputChannels) % (inputNumReadAheadGroups * inputGroupSize) == 0)
+  assert(numCores / numInputChannels >= inputNumReadAheadGroups * inputGroupSize)
   assert(numCores % numOutputChannels == 0)
   assert((numCores / numOutputChannels) % outputGroupSize == 0)
   assert(numCores >= 2 * outputGroupSize)
@@ -565,11 +566,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val groupCounterInputAddr = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
     val groupCounterInputBlock = RegInit(0.asUInt(util.log2Ceil(Math.max(inputGroupSize, 2)).W))
     val nativeLineCounter = RegInit(0.asUInt(util.log2Ceil(Math.max(bramNumNativeLines, 2)).W))
-    val addrPos = if (inputNumReadAheadGroups > 1)
-      groupCounterInputAddr##curInputAddrCore(i)(util.log2Ceil(inputNumReadAheadGroups) - 1, 0) else
+    val addrReadAheadCounter = if (inputNumReadAheadGroups > 1)
+      RegInit(0.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)) else 0.U
+    val addrPos = if (inputNumReadAheadGroups > 1) groupCounterInputAddr##addrReadAheadCounter else
       groupCounterInputAddr
     val dataReadAheadCounter = if (inputNumReadAheadGroups > 1)
-      curInputDataCore(i)(util.log2Ceil(inputNumReadAheadGroups) - 1, 0) else 0.U
+      RegInit(0.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)) else 0.U
     val dataPos = if (inputNumReadAheadGroups > 1) groupCounterInputBlock##dataReadAheadCounter else
       groupCounterInputBlock
 
@@ -593,6 +595,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
         treeCycleCounterInput := 0.U
         groupCounterInputAddr := 0.U
+        if (inputNumReadAheadGroups > 1) {
+          addrReadAheadCounter := addrReadAheadCounter + 1.U
+        }
       } .otherwise {
         groupCounterInputAddr := groupCounterInputAddr + 1.U
       }
@@ -640,6 +645,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         curInputDataCore(i) := Mux(curInputDataCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
           (inputChannelBounds(i) / inputGroupSize).U, curInputDataCore(i) + 1.U)
         groupCounterInputBlock := 0.U
+        if (inputNumReadAheadGroups > 1) {
+          dataReadAheadCounter := dataReadAheadCounter + 1.U // wraps around
+        }
       } .otherwise {
         groupCounterInputBlock := groupCounterInputBlock + 1.U
       }
