@@ -168,10 +168,11 @@ object Launcher {
       },
       "StreamingWrapper3" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(2, Array(0L, 0L), 2, Array(1000000000L, 1000000000L),
-          8, 2, 2, 2, 16, 32, (coreId: Int) => new PassThrough(8, coreId)),
+          12, 2, 2, 2, 16, 32, (coreId: Int) => new PassThrough(8, coreId)), // 12 cores so that each channel does
+          // not have a power of 2
           backendName) {
           (c) => {
-            val inputs = (0 until 8).map(i => String.valueOf((0 until 67).map(j => (i + j).toChar))).toArray
+            val inputs = (0 until 12).map(i => String.valueOf((0 until 67).map(j => (i + j).toChar))).toArray
             runStreamingTest(c, inputs, inputs)
           }
         }
