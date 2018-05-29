@@ -571,7 +571,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val addrPos = if (inputNumReadAheadGroups > 1) groupCounterInputAddr##addrReadAheadCounter else
       groupCounterInputAddr
     val dataReadAheadCounter = if (inputNumReadAheadGroups > 1)
-      RegInit(0.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)) else 0.U
+      RegInit(0.asUInt(util.log2Ceil(inputNumReadAheadGroups).W)) else 0.U // can be pushing blocks to both
+      // group at dataReadAheadCounter and the previous group since we can advance dataReadAheadCounter as soon as the
+      // first input buffer is fully flushed
     val dataPos = if (inputNumReadAheadGroups > 1) groupCounterInputBlock##dataReadAheadCounter else
       groupCounterInputBlock
 
