@@ -356,9 +356,9 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val bramAddrsPerNativeLine = 512 / bramWidth
 
   val _cores = new Array[StreamingCore](numCores)
-  val curInputAddrCore = new Array[UInt](numInputChannels)
-  val curInputDataCore = new Array[UInt](numInputChannels)
-  val curOutputCore = new Array[UInt](numOutputChannels)
+  val curInputAddrGroup = new Array[UInt](numInputChannels)
+  val curInputDataGroup = new Array[UInt](numInputChannels)
+  val curOutputGroup = new Array[UInt](numOutputChannels)
 
   def numCoresForInputChannel(channel: Int): Int = {
     (numCores - 1 - channel) / numInputChannels + 1
@@ -393,26 +393,26 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
   val cores = VecInit(_cores.map(_.io))
 
+  val inputGroupsPerChannel = (numCores / numInputChannels) / inputGroupSize
+  val inputTreeDepth = util.log2Ceil(inputGroupsPerChannel) // register depth
   for (i <- 0 until numInputChannels) {
-    curInputAddrCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
-      .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
-    curInputDataCore(i) = RegInit((inputChannelBounds(i) / inputGroupSize)
-      .asUInt(util.log2Ceil(numCores / inputGroupSize).W))
+    curInputAddrGroup(i) = RegInit(0.asUInt(Math.max(1, util.log2Ceil(inputGroupsPerChannel)).W))
+    curInputDataGroup(i) = RegInit(0.asUInt(Math.max(1, util.log2Ceil(inputGroupsPerChannel)).W))
   }
+  val outputGroupsPerChannel = (numCores / numOutputChannels) / outputGroupSize
+  val outputTreeDepth = util.log2Ceil(outputGroupsPerChannel) // register depth
   for (i <- 0 until numOutputChannels) {
-    curOutputCore(i) = RegInit((outputChannelBounds(i) / outputGroupSize)
-      .asUInt(util.log2Ceil(numCores/ outputGroupSize).W))
+    curOutputGroup(i) = RegInit(0.asUInt(Math.max(1, util.log2Ceil(outputGroupsPerChannel)).W))
   }
 
-  val inputTreeDepth = util.log2Ceil((numCores / numInputChannels) / inputGroupSize) // register depth
   val selInputMemAddr = new Array[Vec[UInt]](numInputChannels)
   val selInputMemAddrValid = new Array[Vec[Bool]](numInputChannels)
   val selInputMemAddrsFinished = new Array[Vec[Bool]](numInputChannels)
   for (chan <- 0 until numInputChannels) {
-    var curTreeLevel = new Array[Array[(UInt, Bool, Bool)]](Math.pow(2, util.log2Ceil(numCores / inputGroupSize)).toInt)
+    var curTreeLevel = new Array[Array[(UInt, Bool, Bool)]](Math.pow(2, util.log2Ceil(inputGroupsPerChannel)).toInt)
     for (i <- 0 until curTreeLevel.length) {
-      val coreIndex = i * inputGroupSize
-      if (coreIndex >= inputChannelBounds(chan) && coreIndex < inputChannelBounds(chan + 1)) {
+      val coreIndex = i * inputGroupSize + inputChannelBounds(chan)
+      if (coreIndex < inputChannelBounds(chan + 1)) {
         val curGroup = new Array[(UInt, Bool, Bool)](inputGroupSize)
         for (j <- coreIndex until coreIndex + inputGroupSize) {
           curGroup(j - coreIndex) = (cores(j).inputMemAddr, cores(j).inputMemAddrValid, cores(j).inputMemAddrsFinished)
@@ -430,12 +430,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
           newTreeLevel(i / 2) = null
         } else {
           newTreeLevel(i / 2) = new Array[(UInt, Bool, Bool)](inputGroupSize)
-          val needReg = curTreeLevel(i) != null && curTreeLevel(i + 1) != null
           for (j <- 0 until inputGroupSize) {
             // TODO make use of registers configurable (e.g. every other tree level, every 4, etc.)
-            val curInputMemAddr = if (needReg) Reg(UInt(32.W)) else Wire(UInt(32.W))
-            val curInputMemAddrValid = if (needReg) Reg(Bool()) else Wire(Bool())
-            val curInputMemAddrsFinished = if (needReg) Reg(Bool()) else Wire(Bool())
+            val curInputMemAddr = Reg(UInt(32.W))
+            val curInputMemAddrValid = Reg(Bool())
+            val curInputMemAddrsFinished = Reg(Bool())
             if (curTreeLevel(i) == null) {
               curInputMemAddr := curTreeLevel(i + 1)(j)._1
               curInputMemAddrValid := curTreeLevel(i + 1)(j)._2
@@ -445,11 +444,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
               curInputMemAddrValid := curTreeLevel(i)(j)._2
               curInputMemAddrsFinished := curTreeLevel(i)(j)._3
             } else {
-              curInputMemAddr := Mux(curInputAddrCore(chan)(levelIdx, levelIdx) === 1.U,
+              curInputMemAddr := Mux(curInputAddrGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._1, curTreeLevel(i)(j)._1)
-              curInputMemAddrValid := Mux(curInputAddrCore(chan)(levelIdx, levelIdx) === 1.U,
+              curInputMemAddrValid := Mux(curInputAddrGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._2, curTreeLevel(i)(j)._2)
-              curInputMemAddrsFinished := Mux(curInputAddrCore(chan)(levelIdx, levelIdx) === 1.U,
+              curInputMemAddrsFinished := Mux(curInputAddrGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._3, curTreeLevel(i)(j)._3)
             }
             newTreeLevel(i / 2)(j) = (curInputMemAddr, curInputMemAddrValid, curInputMemAddrsFinished)
@@ -465,7 +464,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   }
 
   // TODO massive code duplication here
-  var outputTreeLevel = 0
   val selOutputMemAddr = new Array[Vec[UInt]](numOutputChannels)
   val selOutputMemAddrValid = new Array[Vec[Bool]](numOutputChannels)
   val selOutputMemBlockValid = new Array[Vec[Bool]](numOutputChannels)
@@ -473,11 +471,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val selOutputMemIdx = new Array[Vec[UInt]](numOutputChannels)
   val selOutputFinished = new Array[Vec[Bool]](numOutputChannels)
   for (chan <- 0 until numOutputChannels) {
-    var curTreeLevel = new Array[Array[(UInt, Bool, Bool, UInt, UInt, Bool)]](Math.pow(2, util.log2Ceil(numCores)).toInt
-      / outputGroupSize)
+    var curTreeLevel = new Array[Array[(UInt, Bool, Bool, UInt, UInt, Bool)]](
+      Math.pow(2, util.log2Ceil(outputGroupsPerChannel)).toInt)
     for (i <- 0 until curTreeLevel.length) {
-      val coreIndex = i * outputGroupSize
-      if (coreIndex >= outputChannelBounds(chan) && coreIndex < outputChannelBounds(chan + 1)) {
+      val coreIndex = i * outputGroupSize + outputChannelBounds(chan)
+      if (coreIndex < outputChannelBounds(chan + 1)) {
         val curGroup = new Array[(UInt, Bool, Bool, UInt, UInt, Bool)](outputGroupSize)
         for (j <- coreIndex until coreIndex + outputGroupSize) {
           curGroup(j - coreIndex) = (cores(j).outputMemAddr, cores(j).outputMemAddrValid,
@@ -489,7 +487,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         curTreeLevel(i) = null
       }
     }
-    outputTreeLevel = 0
+    var levelIdx = 0
     while (curTreeLevel.length > 1) {
       val newTreeLevel = new Array[Array[(UInt, Bool, Bool, UInt, UInt, Bool)]](curTreeLevel.length / 2)
       // TODO can apply same reg/level skipping optimization as in input tree
@@ -520,15 +518,15 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
               curOutputMemIdx := curTreeLevel(i)(j)._5
               curOutputFinished := curTreeLevel(i)(j)._6
             } else {
-              curOutputMemAddr := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
+              curOutputMemAddr := Mux(curOutputGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._1, curTreeLevel(i)(j)._1)
-              curOutputMemAddrValid := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
+              curOutputMemAddrValid := Mux(curOutputGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._2, curTreeLevel(i)(j)._2)
-              curOutputMemBlockValid := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
+              curOutputMemBlockValid := Mux(curOutputGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._3, curTreeLevel(i)(j)._3)
-              curOutputMemBlock := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
+              curOutputMemBlock := Mux(curOutputGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._4, curTreeLevel(i)(j)._4)
-              curOutputMemIdx := Mux(curOutputCore(chan)(outputTreeLevel, outputTreeLevel) === 1.U,
+              curOutputMemIdx := Mux(curOutputGroup(chan)(levelIdx, levelIdx) === 1.U,
                 curTreeLevel(i + 1)(j)._5, curTreeLevel(i)(j)._5)
               curOutputFinished := curTreeLevel(i + 1)(j)._6 && curTreeLevel(i)(j)._6
             }
@@ -538,7 +536,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         }
       }
       curTreeLevel = newTreeLevel
-      outputTreeLevel += 1
+      levelIdx += 1
     }
     selOutputMemAddr(chan) = VecInit(curTreeLevel(0).map(_._1))
     selOutputMemAddrValid(chan) = VecInit(curTreeLevel(0).map(_._2))
@@ -588,8 +586,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         inputMemAddrValid(addrPos) := true.B
       }
       when (groupCounterInputAddr === (inputGroupSize - 1).U) {
-        curInputAddrCore(i) := Mux(curInputAddrCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-          (inputChannelBounds(i) / inputGroupSize).U, curInputAddrCore(i) + 1.U)
+        curInputAddrGroup(i) := Mux(curInputAddrGroup(i) === (inputGroupsPerChannel - 1).U, 0.U,
+          curInputAddrGroup(i) + 1.U)
         treeCycleCounterInput := 0.U
         groupCounterInputAddr := 0.U
         if (inputNumReadAheadGroups > 1) {
@@ -639,8 +637,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         inputMemAddrProcessed(dataPos) := false.B
       }
       when (groupCounterInputBlock === (inputGroupSize - 1).U) {
-        curInputDataCore(i) := Mux(curInputDataCore(i) === (inputChannelBounds(i + 1) / inputGroupSize - 1).U,
-          (inputChannelBounds(i) / inputGroupSize).U, curInputDataCore(i) + 1.U)
+        curInputDataGroup(i) := Mux(curInputDataGroup(i) === (inputGroupsPerChannel - 1).U, 0.U,
+          curInputDataGroup(i) + 1.U)
         groupCounterInputBlock := 0.U
         if (inputNumReadAheadGroups > 1) {
           dataReadAheadCounter := dataReadAheadCounter + 1.U // wraps around
@@ -655,10 +653,10 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         val groupIdx = k - j * inputGroupSize
         cores(k).inputMemBlock := inputBuffer(groupIdx)(inputBufferIdx(groupIdx))
         cores(k).inputMemIdx := inputBufferIdx(groupIdx)
-        val prevInputDataCore = Mux(curInputDataCore(i) === (inputChannelBounds(i) / inputGroupSize).U,
-          (inputChannelBounds(i + 1) / inputGroupSize - 1).U, curInputDataCore(i) - 1.U)
-        cores(k).inputMemBlockValid := Mux(
-          Mux(groupIdx.U < groupCounterInputBlock, curInputDataCore(i), prevInputDataCore) === j.U,
+        val prevInputDataGroup = Mux(curInputDataGroup(i) === 0.U, (inputGroupsPerChannel - 1).U,
+          curInputDataGroup(i) - 1.U)
+        val inputGroupToUse = Mux(groupIdx.U < groupCounterInputBlock, curInputDataGroup(i), prevInputDataGroup)
+        cores(k).inputMemBlockValid := Mux(inputGroupToUse === (j - inputChannelBounds(i) / inputGroupSize).U,
           inputBufferValid(groupIdx), false.B)
       }
     }
@@ -666,8 +664,8 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
 
   val outputChannelsComplete = new Array[Bool](numOutputChannels)
   for (i <- 0 until numOutputChannels) {
-    val treeCycleCounterOutput = RegInit(0.asUInt(util.log2Ceil(outputTreeLevel + 1).W))
-    when (treeCycleCounterOutput =/= outputTreeLevel.U) {
+    val treeCycleCounterOutput = RegInit(0.asUInt(Math.max(1, util.log2Ceil(outputTreeDepth + 1)).W))
+    when (treeCycleCounterOutput =/= outputTreeDepth.U) {
       treeCycleCounterOutput := treeCycleCounterOutput + 1.U
     }
     // need the following two fields because, unlike in the input case, address may not have been emitted to
@@ -683,11 +681,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     val groupCounterOutputBlock = RegInit(0.asUInt(util.log2Ceil(Math.max(outputGroupSize, 2)).W))
     val nativeLineCounter = RegInit(0.asUInt(util.log2Ceil(Math.max(bramNumNativeLines, 2)).W))
     val zerothCoreDelay = RegInit(false.B) // give zeroth core in group one cycle to produce valid address
-    when (treeCycleCounterOutput === outputTreeLevel.U && !zerothCoreDelay) {
+    when (treeCycleCounterOutput === outputTreeDepth.U && !zerothCoreDelay) {
       zerothCoreDelay := true.B
     }
     for (j <- 0 until outputGroupSize) {
-      when (treeCycleCounterOutput === outputTreeLevel.U && selOutputMemBlockValid(i)(j) &&
+      when (treeCycleCounterOutput === outputTreeDepth.U && selOutputMemBlockValid(i)(j) &&
         selOutputMemIdx(i)(j) === (bramNumAddrs - 1).U) {
         outputBufferValid(j) := true.B
       }
@@ -695,7 +693,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         outputBuffer(j)(selOutputMemIdx(i)(j)) := selOutputMemBlock(i)(j)
       }
 
-      when(treeCycleCounterOutput === outputTreeLevel.U && selOutputMemAddrValid(i)(j) && !outputMemAddrValid(j) &&
+      when(treeCycleCounterOutput === outputTreeDepth.U && selOutputMemAddrValid(i)(j) && !outputMemAddrValid(j) &&
         (groupCounterOutputAddr < j.U || !zerothCoreDelay)) {
         outputMemAddrValid(j) := true.B
         outputMemAddr(j) := selOutputMemAddr(i)(j)
@@ -729,8 +727,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
       || (!outputMemAddrValid(groupCounterOutputBlock) &&
           (groupCounterOutputBlock < groupCounterOutputAddr || addrsComplete))) {
       when (groupCounterOutputBlock === (outputGroupSize - 1).U) {
-        curOutputCore(i) := Mux(curOutputCore(i) === (outputChannelBounds(i + 1) / outputGroupSize - 1).U,
-          (outputChannelBounds(i) / outputGroupSize).U, curOutputCore(i) + 1.U)
+        curOutputGroup(i) := Mux(curOutputGroup(i) === (outputGroupsPerChannel - 1).U, 0.U, curOutputGroup(i) + 1.U)
         treeCycleCounterOutput := 0.U
         groupCounterOutputBlock := 0.U
         groupCounterOutputAddr := 0.U
@@ -746,9 +743,11 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     }
     for (j <- outputChannelBounds(i) / outputGroupSize until outputChannelBounds(i + 1) / outputGroupSize) {
       for (k <- j * outputGroupSize until (j + 1) * outputGroupSize) {
-        cores(k).outputMemAddrReady := Mux(curOutputCore(i) === j.U, treeCycleCounterOutput === outputTreeLevel.U
-          && selOutputMemAddrValid(i)(k - j * outputGroupSize) && !outputMemAddrValid(k - j * outputGroupSize) &&
-          (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay), false.B)
+        cores(k).outputMemAddrReady := Mux(curOutputGroup(i) === (j - outputChannelBounds(i) / outputGroupSize).U,
+          treeCycleCounterOutput === outputTreeDepth.U && selOutputMemAddrValid(i)(k - j * outputGroupSize) &&
+            !outputMemAddrValid(k - j * outputGroupSize) &&
+            (groupCounterOutputAddr < (k - j * outputGroupSize).U || !zerothCoreDelay),
+          false.B)
       }
     }
   }
