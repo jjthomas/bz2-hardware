@@ -97,8 +97,7 @@ int main(int argc, char **argv) {
   gettimeofday(&end, 0);
   timersub(&end, &start, &diff);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
-  // Mops calculation assumes input batch loading is insignificant
-  printf("%.2f Mops/s\n", (chars * NUM_THREADS) / BATCH_SIZE * TREE_DEPTH * NUM_TREES / 1000000.0 / secs);
+  printf("%.2f Mops/s\n", ((chars * NUM_THREADS) + (chars * NUM_THREADS) / BATCH_SIZE * TREE_DEPTH * NUM_TREES) / 1000000.0 / secs);
   printf("%.2f MB/s, %d input tokens, %d output tokens, random output byte: %d\n",
     (chars * NUM_THREADS) / 1000000.0 / secs, chars / 4,
     output_count[0], output_count[0] == 0 ? 0 : output_buf[rand() % (output_count[0] * 4)]);
