@@ -9,37 +9,43 @@ using namespace std;
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-#define BATCH_SIZE 8
-#define TREE_SIZE 4095
+#define BATCH_SIZE 10
+#define TREE_DEPTH 4
+#define TREE_SIZE ((1 << TREE_DEPTH) - 1)
+#define NUM_TREES 5000
 
 typedef uint8_t uint1_t;
 
 typedef struct {
-  uint8_t field;
-  uint32_t split;
+  uint16_t field;
+  uint16_t split;
 } node;
 
 void run(uint32_t *input, uint32_t input_count, uint32_t *output, uint32_t *output_count) {
   uint32_t input_idx = 0;
   uint32_t output_idx = 0;
-  uint8_t words_consumed = 0;
-  uint32_t buffer[BATCH_SIZE];
-  node tree[TREE_SIZE];
+  uint16_t words_consumed = 0;
+  uint16_t buffer[BATCH_SIZE];
+  node tree[TREE_SIZE * NUM_TREES];
 
-  for (int i = 0; i < TREE_SIZE; i++) {
+  for (int i = 0; i < TREE_SIZE * NUM_TREES; i++) {
     tree[i].field = rand() % BATCH_SIZE;
-    tree[i].split = 1073741824; // midpoint of rand values
+    tree[i].split = rand() & ((1 << 16) - 1);
   }
 
   for (uint32_t i = input_idx; i < input_count; i++) {
     buffer[words_consumed++] = input[i];
     if (words_consumed == BATCH_SIZE) {
-      int tree_idx = 0;
-      while (tree_idx < TREE_SIZE / 2) {
-        node cur = tree[tree_idx];
-        tree_idx = buffer[cur.field] < cur.split ? tree_idx * 2 + 1 : tree_idx * 2 + 2;
+      uint32_t sum = 0;
+      for (uint32_t tree_base = 0; tree_base < TREE_SIZE * NUM_TREES; tree_base += TREE_SIZE) {
+        int tree_idx = 0;
+        while (tree_idx < TREE_SIZE / 2) {
+          node cur = tree[tree_base + tree_idx];
+          tree_idx = buffer[cur.field] < cur.split ? tree_idx * 2 + 1 : tree_idx * 2 + 2;
+        }
+        sum += tree[tree_base + tree_idx].split;
       }
-      output[output_idx++] = tree[tree_idx].split;
+      output[output_idx++] = sum;
       words_consumed = 0;
     }
   }
@@ -76,7 +82,7 @@ int main(int argc, char **argv) {
     memcpy(input_buf + i * chars, input_buf, chars);
   }
   for (uint32_t i = 0; i < chars / 4 * NUM_THREADS; i++) {
-    ((uint32_t *)input_buf)[i] = rand();
+    ((uint32_t *)input_buf)[i] = rand() & ((1 << 16) - 1);
   }
   uint8_t *output_buf = new uint8_t[chars * 2 * NUM_THREADS];
   uint32_t *output_count = new uint32_t[NUM_THREADS];
@@ -91,6 +97,8 @@ int main(int argc, char **argv) {
   gettimeofday(&end, 0);
   timersub(&end, &start, &diff);
   double secs = diff.tv_sec + diff.tv_usec / 1000000.0;
+  // Mops calculation assumes input batch loading is insignificant
+  printf("%.2f Mops/s\n", (chars * NUM_THREADS) / BATCH_SIZE * TREE_DEPTH * NUM_TREES / 1000000.0 / secs);
   printf("%.2f MB/s, %d input tokens, %d output tokens, random output byte: %d\n",
     (chars * NUM_THREADS) / 1000000.0 / secs, chars / 4,
     output_count[0], output_count[0] == 0 ? 0 : output_buf[rand() % (output_count[0] * 4)]);
