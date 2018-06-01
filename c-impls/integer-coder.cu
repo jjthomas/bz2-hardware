@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cuda.h>
+#include <assert.h>
 
 using namespace std;
 
@@ -223,9 +224,9 @@ int main(int argc, char **argv) {
   uint8_t *output_dev, *input_dev;
   uint32_t *output_count_dev;
   cudaSetDevice(0);
-  cudaMalloc((void **) &output_dev, chars * 2 * NUM_THREADS);
-  cudaMalloc((void **) &input_dev, chars * NUM_THREADS);
-  cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS);
+  assert(cudaMalloc((void **) &output_dev, chars * 2 * NUM_THREADS) == cudaSuccess);
+  assert(cudaMalloc((void **) &input_dev, chars * NUM_THREADS) == cudaSuccess);
+  assert(cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS) == cudaSuccess);
 
   cudaMemcpy(input_dev, combined_input, chars * NUM_THREADS, cudaMemcpyHostToDevice);
 

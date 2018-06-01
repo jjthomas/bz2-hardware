@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cuda.h>
+#include <assert.h>
 
 using namespace std;
 
@@ -22,7 +23,7 @@ using namespace std;
 #define BATCH_SIZE 10
 #define TREE_DEPTH 4
 #define TREE_SIZE ((1 << TREE_DEPTH) - 1)
-#define NUM_TREES 5000
+#define NUM_TREES 500
 
 typedef uint8_t uint1_t;
 
@@ -34,7 +35,7 @@ typedef struct {
 __global__ void run(uint32_t *input_full, uint32_t input_count, uint32_t *output_full, uint32_t *output_count) {
   uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
   uint32_t *input_buf = input_full + index * input_count;
-  uint32_t *output_buf = output_full + index * 2 * input_count;
+  uint32_t *output_buf = output_full + index * input_count;
 
   uint32_t input_idx = 0;
   uint32_t output_buf_idx = 0;
@@ -129,9 +130,9 @@ int main(int argc, char **argv) {
   uint8_t *output_dev, *input_dev;
   uint32_t *output_count_dev;
   cudaSetDevice(0);
-  cudaMalloc((void **) &output_dev, chars * NUM_THREADS);
-  cudaMalloc((void **) &input_dev, chars * NUM_THREADS);
-  cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS);
+  assert(cudaMalloc((void **) &output_dev, chars * NUM_THREADS) == cudaSuccess);
+  assert(cudaMalloc((void **) &input_dev, chars * NUM_THREADS) == cudaSuccess);
+  assert(cudaMalloc((void **) &output_count_dev, sizeof(uint32_t) * NUM_THREADS) == cudaSuccess);
 
   cudaMemcpy(input_dev, combined_input, chars * NUM_THREADS, cudaMemcpyHostToDevice);
 
