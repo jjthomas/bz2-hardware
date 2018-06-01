@@ -49,6 +49,7 @@ __global__ void run(uint32_t *input_full, uint32_t input_count, uint32_t *output
       tree[i].split = 1 << 15; // midpoint of 16-bit values
     }
   }
+  __syncthreads();
 
 
   #define BUF_SIZE 256

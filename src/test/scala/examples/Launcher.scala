@@ -4,11 +4,8 @@ package examples
 import java.io.File
 
 import chisel3.iotesters.Driver
-import examples.JsonFieldExtractor.{JsonFieldExtractorGeneric, JsonFieldExtractorSpecific}
 import language.Builder
 import utils.TutorialRunner
-
-import scala.util.Random
 
 object Launcher {
   def runStreamingTest(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
@@ -266,10 +263,10 @@ object Launcher {
       "StreamingWrapper10" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
           1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) =>
-          new GBDT(100, 16, 1500, 4, coreId: Int)), backendName) {
+          new GBDT(100, 25, 1000, 4, coreId: Int)), backendName) {
           (c) => {
             val seed = 2956547051745311985L
-            val (input, output) = GBDT.genInputAndOutput(2, 16, 7, 2, 2, seed)
+            val (input, output) = GBDT.genInputAndOutput(2, 25, 7, 2, 2, seed)
             Builder.curBuilder.genCSim(new File("gbdt.c"), false)
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }

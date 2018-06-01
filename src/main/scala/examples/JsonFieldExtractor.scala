@@ -338,17 +338,17 @@ object JsonFieldExtractor {
       lastChar := StreamInput
     }
   }
+}
 
-  class JsonFieldExtractorGeneric(maxFieldChars: Int, maxFields: Int, maxNestDepth: Int,
-                                  coreId: Int) extends ProcessingUnit(8, 8, coreId) {
-    JsonFieldExtractor.genCircuit(null, null, maxFieldChars, maxFields, maxNestDepth, coreId)
-    Builder.curBuilder.compile()
-  }
+class JsonFieldExtractorGeneric(maxFieldChars: Int, maxFields: Int, maxNestDepth: Int,
+                                coreId: Int) extends ProcessingUnit(8, 8, coreId) {
+  JsonFieldExtractor.genCircuit(null, null, maxFieldChars, maxFields, maxNestDepth, coreId)
+  Builder.curBuilder.compile()
+}
 
-  class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int,
-                                   coreId: Int) extends ProcessingUnit(8, 8, coreId) {
-    val (seqTrans, splitTrans, maxMatchId, _) = JsonFieldExtractor.genTransitions(fields, -1)
-    JsonFieldExtractor.genCircuit(seqTrans, splitTrans, maxMatchId, 0, maxNestDepth, coreId)
-    Builder.curBuilder.compile()
-  }
+class JsonFieldExtractorSpecific(fields: Array[Array[String]], maxNestDepth: Int,
+                                 coreId: Int) extends ProcessingUnit(8, 8, coreId) {
+  val (seqTrans, splitTrans, maxMatchId, _) = JsonFieldExtractor.genTransitions(fields, -1)
+  JsonFieldExtractor.genCircuit(seqTrans, splitTrans, maxMatchId, 0, maxNestDepth, coreId)
+  Builder.curBuilder.compile()
 }
