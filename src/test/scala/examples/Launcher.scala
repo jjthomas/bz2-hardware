@@ -262,6 +262,18 @@ object Launcher {
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
         }
+      },
+      "StreamingWrapper10" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) =>
+          new GBDT(100, 16, 1500, 4, coreId: Int)), backendName) {
+          (c) => {
+            val seed = 2956547051745311985L
+            val (input, output) = GBDT.genInputAndOutput(2, 16, 7, 2, 2, seed)
+            Builder.curBuilder.genCSim(new File("gbdt.c"), false)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
+          }
+        }
       }
   )
   def main(args: Array[String]): Unit = {
