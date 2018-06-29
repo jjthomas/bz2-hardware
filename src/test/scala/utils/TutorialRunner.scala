@@ -48,6 +48,7 @@ object TutorialRunner {
               exception.printStackTrace()
               errors += s"Tutorial $testName: exception ${exception.getMessage}"
             case t : Throwable =>
+              t.printStackTrace()
               errors += s"Tutorial $testName: throwable ${t.getMessage}"
           }
         case _ =>

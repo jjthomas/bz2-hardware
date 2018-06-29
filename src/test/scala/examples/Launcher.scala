@@ -271,6 +271,21 @@ object Launcher {
             runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
           }
         }
+      },
+      "StreamingWrapper11" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) =>
+          new SmithWaterman(4, 1, coreId)),
+          backendName) {
+          (c) => {
+            val input = Util.charsToBits(s"time${2.toChar}tme".toCharArray)
+            val inputs = Array(input, input, input, input)
+            val output = (32, BigInt(3))
+            val outputs = Array(output, output, output, output)
+            Builder.curBuilder.genCSim(new File("sw.c"), false)
+            runStreamingTest(c, inputs, outputs)
+          }
+        }
       }
   )
   def main(args: Array[String]): Unit = {
