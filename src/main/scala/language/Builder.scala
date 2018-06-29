@@ -233,6 +233,14 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   def determineReadDepthsHelper(table: Array[(mutable.Set[Int], mutable.Set[StreamBits], Boolean)], depths: Array[Int],
                                 curRam: Int, curCallDepth: Int): Unit = {
     require(curCallDepth < depths.length, "cycle in BRAM read dependency graph")
+    // TODO this is a very conservative dependency analysis; less conservative would be to look at individual
+    // dependency chains and compute the max length of all of them (accounting specially for dependencies with only
+    // one distinct read address). This analysis may combine multiple disjoint chains into one long chain. The least
+    // conservative would be to compute read address disambiguation points for each BRAM to determine its depth. For
+    // example, if we had a read like so: "if (reg1) { if (g[x]) b[x] } else { if (g[y]) b[y] }", the read to b is
+    // disambiguated by reg1 and is not dependent on the read to g. Less conservative methods will allow cycles (and
+    // this one can also be adapted to allow cycles by simply ending the dependency chain when a repeat BRAM is
+    // reached).
     if (depths(curRam) != 0) {
       return
     }
@@ -543,6 +551,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     }
     val readDepths = determineReadDepths(depTable)
     val maxReadDepth = if (readDepths.length == 0) 1 else readDepths.max
+    // TODO add assert(maxReadDepth == 1)
 
     for ((b, i) <- brams.zipWithIndex) {
       if (b.mode == BRAMMode.CONFLICT_REG && readDepths(i) == 1) {
