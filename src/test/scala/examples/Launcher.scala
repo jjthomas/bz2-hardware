@@ -286,6 +286,41 @@ object Launcher {
             runStreamingTest(c, inputs, outputs)
           }
         }
+      },
+      "StreamingWrapper12" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) => {
+            /*
+            // email regex
+            val addr = Regex.RangeList(Seq(('0', '9'), ('a', 'z'), ('-', '-'), ('+', '+')))
+            val addrPlus = Regex.And(addr.dup(), Regex.Star(addr.dup()))
+            val dom = Regex.RangeList(Seq(('0', '9'), ('a', 'z'), ('-', '-')))
+            val domPlus = Regex.And(dom.dup(), Regex.Star(dom.dup()))
+            val at = Regex.RangeList(Seq(('@', '@')))
+            val dot = Regex.RangeList(Seq(('.', '.')))
+            new Regex(
+              Regex.And(addrPlus, Regex.And(at, Regex.And(domPlus.dup(), Regex.And(dot, domPlus.dup())))),
+              coreId
+            )
+            */
+            new Regex( // a+b+
+              Regex.And(
+                Regex.And(Regex.RangeList(Seq(('a', 'a'))), Regex.Star(Regex.RangeList(Seq(('a', 'a'))))),
+                Regex.And(Regex.RangeList(Seq(('b', 'b'))), Regex.Star(Regex.RangeList(Seq(('b', 'b')))))
+              ),
+              coreId
+            )
+          }),
+          backendName) {
+          (c) => {
+            val input = Util.charsToBits(s"xaab".toCharArray) // need initialization character 'x'
+            val inputs = Array(input, input, input, input)
+            val output = (32, BigInt(3))
+            val outputs = Array(output, output, output, output)
+            Builder.curBuilder.genCSim(new File("regex.c"), false)
+            runStreamingTest(c, inputs, outputs)
+          }
+        }
       }
   )
   def main(args: Array[String]): Unit = {
