@@ -56,7 +56,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
   val finishedReg = RegInit(false.B)
   // next reg and vector regs values that are about to be written for the current active tick
   var nextRegs: Array[UInt] = null
-  var nextVectorRegs: Array[(UInt, UInt)] = null
+  var nextVectorRegs: Array[Vec[UInt]] = null
   var nextVars: Array[UInt] = null
   val swhileDone = Wire(Bool())
   // all BRAM reads for active tick are ready
@@ -298,8 +298,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
             if (nextVectorRegs(v.arg.stateId) == null) {
               chiselVectorRegs(v.arg.stateId)(addr)
             } else {
-              Mux(pipeFinishing && addr === nextVectorRegs(v.arg.stateId)._1, nextVectorRegs(v.arg.stateId)._2,
-                chiselVectorRegs(v.arg.stateId)(addr))
+              Mux(pipeFinishing, nextVectorRegs(v.arg.stateId)(addr), chiselVectorRegs(v.arg.stateId)(addr))
             }
           }
         }
@@ -648,24 +647,25 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       for ((cond, isInSwhile, d) <- writes) {
         data = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(d, CUR_TICK), data)
       }
-      nextRegs(i) = data
+      nextRegs(i) = Wire(UInt(regs(i).width.W))
+      nextRegs(i) := data
       cr := Mux(pipeFinishing, data, cr)
     }
 
     // vector register writes
-    nextVectorRegs = new Array[(UInt, UInt)](chiselVectorRegs.length)
+    nextVectorRegs = new Array[Vec[UInt]](chiselVectorRegs.length)
     for (((cv, writes), vecIdx) <- chiselVectorRegs.zip(vectorRegWrites).zipWithIndex) {
       if (writes.length > 0) { // don't write anything if no user-defined writes so that ROM will be synthesized
-        var idx = genBits(writes(0)._3, CUR_TICK)
-        for ((cond, isInSwhile, i, _) <- writes.drop(1)) {
-          idx = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(i, CUR_TICK), idx)
+        nextVectorRegs(vecIdx) = Wire(Vec(vectorRegs(vecIdx).numEls, UInt(vectorRegs(vecIdx).width.W)))
+        for (elIdx <- 0 until vectorRegs(vecIdx).numEls) {
+          var data = cv(elIdx)
+          for ((cond, isInSwhile, i, d) <- writes) {
+            data = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone)
+              && genBits(i, CUR_TICK) === elIdx.U, genBits(d, CUR_TICK), data)
+          }
+          nextVectorRegs(vecIdx)(elIdx) := data
+          cv(elIdx) := Mux(pipeFinishing, data, cv(elIdx))
         }
-        var data = cv(idx)
-        for ((cond, isInSwhile, _, d) <- writes) {
-          data = Mux(genBool(cond, CUR_TICK) && (if (isInSwhile) true.B else swhileDone), genBits(d, CUR_TICK), data)
-        }
-        nextVectorRegs(vecIdx) = (idx, data)
-        cv(idx) := Mux(pipeFinishing, data, cv(idx))
       }
     }
 
@@ -758,7 +758,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val simVectorRegsWrite = new Array[Array[BigInt]](vectorRegs.length)
     val simBramsWrite = new Array[Array[BigInt]](brams.length)
     val simRegsWasWritten = (0 until regs.length).map(_ => false).toArray
-    val simVectorRegsWasWritten = (0 until vectorRegs.length).map(_ => false).toArray
+    val simVectorRegsWasWritten =
+      (0 until vectorRegs.length).map(i => (0 until vectorRegs(i).numEls).map(_ => false).toArray).toArray
     val simBramsWasWritten = (0 until brams.length).map(_ => false).toArray
     val simBramsWasRead = new Array[BigInt](brams.length)
     val simVarsCache = new Array[BigInt](vars.length)
@@ -870,10 +871,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
                 simRegsWasWritten(r.stateId) = true
               }
               case v: VectorRegSelect => {
-                simVectorRegsWrite(v.arg.stateId)(genSimBits(v.idx).toInt) =
+                val vectorAddr = genSimBits(v.idx).toInt
+                simVectorRegsWrite(v.arg.stateId)(vectorAddr) =
                   truncate(genSimBits(a.rhs), vectorRegs(v.arg.stateId).width)
-                require(!simVectorRegsWasWritten(v.arg.stateId), s"vector reg ${v.arg.stateId} written multiple times")
-                simVectorRegsWasWritten(v.arg.stateId) = true
+                require(!simVectorRegsWasWritten(v.arg.stateId)(vectorAddr),
+                  s"vector reg ${v.arg.stateId} written multiple times at address $vectorAddr")
+                simVectorRegsWasWritten(v.arg.stateId)(vectorAddr) = true
               }
               case b: BRAMSelect => {
                 simBramsWrite(b.arg.stateId)(genSimBits(b.idx).toInt) =
@@ -901,8 +904,8 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
         for (i <- 0 until simVectorRegsWrite.length) {
           for (j <- 0 until simVectorRegsWrite(i).length) {
             simVectorRegsRead(i)(j) = simVectorRegsWrite(i)(j)
+            simVectorRegsWasWritten(i)(j) = false
           }
-          simVectorRegsWasWritten(i) = false
         }
         for (i <- 0 until simBramsWrite.length) {
           for (j <- 0 until simBramsWrite(i).length) {
