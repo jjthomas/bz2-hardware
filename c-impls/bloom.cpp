@@ -41,7 +41,7 @@ void run(uint8_t *input, uint32_t input_count, uint8_t *output, uint32_t *output
         uint32_t cell = (hashes[j] >> 3) & (NUM_BLOOM_BYTES - 1);
         uint32_t bit = hashes[j] & 7;
         bloom[cell] |= 1 << bit;
-        hashes[j] = hash_seeds[j]
+        hashes[j] = hash_seeds[j];
       }
       byte_counter = 0;
       item_counter++;

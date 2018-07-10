@@ -30,7 +30,7 @@ typedef uint8_t uint1_t;
 __global__ void run(uint8_t *input_full, uint32_t input_count, uint8_t *output_full, uint32_t *output_count) {
   uint64_t index = blockIdx.x * blockDim.x + threadIdx.x;
   uint8_t *input_buf = input_full + index * input_count;
-  uint32_t *output_buf = output_full + index * input_count;
+  uint8_t *output_buf = output_full + index * input_count;
 
   uint32_t input_idx = 0;
   uint32_t output_buf_idx = 0;
@@ -62,7 +62,7 @@ __global__ void run(uint8_t *input_full, uint32_t input_count, uint8_t *output_f
           uint32_t cell = (hashes[j] >> 3) & (NUM_BLOOM_BYTES - 1);
           uint32_t bit = hashes[j] & 7;
           bloom[cell] |= 1 << bit;
-          hashes[j] = hash_seeds[j]
+          hashes[j] = hash_seeds[j];
         }
         byte_counter = 0;
         item_counter++;
