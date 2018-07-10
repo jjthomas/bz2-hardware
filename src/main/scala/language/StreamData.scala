@@ -5,6 +5,7 @@ sealed abstract class StreamBits(width: Int) extends Product {
   def apply(upper: Int, lower: Int) = BitSelect(this, upper, lower)
   def +(other: StreamBits) = Add(this, other)
   def -(other: StreamBits) = Subtract(this, other)
+  def ^(other: StreamBits) = Xor(this, other)
   def ===(other: StreamBits) = Equal(this, other)
   def =/=(other: StreamBits) = NotEqual(this, other)
   def <(other: StreamBits) = LessThan(this, other)
@@ -22,6 +23,7 @@ sealed abstract class StreamBits(width: Int) extends Product {
 
 case class Add(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth) + 1)
 case class Subtract(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
+case class Xor(first: StreamBits, second: StreamBits) extends StreamBits(math.max(first.getWidth, second.getWidth))
 case class Concat(first: StreamBits, second: StreamBits) extends StreamBits(first.getWidth + second.getWidth)
 case class StreamMux(cond: StreamBool, t: StreamBits, f: StreamBits)
   extends StreamBits(math.max(t.getWidth, f.getWidth))

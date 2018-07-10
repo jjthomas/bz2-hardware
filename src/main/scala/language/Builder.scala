@@ -272,6 +272,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case l: Literal => l.l.asUInt(l.getWidth.W)
       case a: Add => genBits(a.first, valsToUse) +& genBits(a.second, valsToUse)
       case s: Subtract => genBits(s.first, valsToUse) - genBits(s.second, valsToUse)
+      case x: Xor => genBits(x.first, valsToUse) ^ genBits(x.second, valsToUse)
       case c: Concat => genBits(c.first, valsToUse)##genBits(c.second, valsToUse)
       case i: StreamInput.type => if (valsToUse == CUR_TICK) inputReg else
         // unless there is no current input or we are about to flush the current input, use the current input
@@ -341,6 +342,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
       case l: Literal => cStringForValue(l.l)
       case a: Add => s"(${genCBits(a.first)} + ${genCBits(a.second)})"
       case s: Subtract => s"(${genCBits(s.first)} - ${genCBits(s.second)})"
+      case x: Xor => s"(${genCBits(x.first)} ^ ${genCBits(x.second)})"
       case c: Concat => s"(((uint64_t)${genCBits(c.first)} << ${c.second.getWidth}) | ${genCBits(c.second)})"
       case i: StreamInput.type => "input[idx_protect(i, input_len - 1)]"
       case s: BitSelect => s"(((uint64_t)${genCBits(s.arg)} >> ${s.lower}) & ((1L << ${s.upper - s.lower + 1}) - 1))"
@@ -773,12 +775,12 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     for ((v, i) <- vectorRegs.zipWithIndex) {
       val nextEl = if (v.init != null) v.init.toArray else (0 until v.numEls).map(_ => BigInt(Random.nextInt())).toArray
       simVectorRegsRead(i) = nextEl
-      simVectorRegsWrite(i) = nextEl
+      simVectorRegsWrite(i) = nextEl.clone()
     }
     for ((b, i) <- brams.zipWithIndex) {
       val nextEl = (0 until b.numEls).map(_ => BigInt(Random.nextInt())).toArray
       simBramsRead(i) = nextEl
-      simBramsWrite(i) = nextEl
+      simBramsWrite(i) = nextEl.clone()
     }
 
     var inputWord: BigInt = null
@@ -798,6 +800,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
           require(first >= second, s"tried to subtract ${s.first}=$first - ${s.second}=$second")
           first - second
         }
+        case x: Xor => genSimBits(x.first) ^ genSimBits(x.second)
         case c: Concat => (genSimBits(c.first) << c.second.getWidth) | genSimBits(c.second)
         case i: StreamInput.type => inputWord
         case s: BitSelect => {

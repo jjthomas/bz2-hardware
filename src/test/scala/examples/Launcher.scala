@@ -321,6 +321,20 @@ object Launcher {
             runStreamingTest(c, inputs, outputs)
           }
         }
+      },
+      "StreamingWrapper13" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
+          1000000000L), 4, 1, 1, 1, 32, 16, (coreId: Int) =>
+          new BloomFilter(4, 4, 4, 8, 2, 2956547051745311985L, coreId)), backendName) {
+          (c) => {
+            val seed = 2956547051745311985L
+            val input = IntegerCoder.genRandomWords(32, 4, seed)
+            // standard is 3072 items, 32768 bloom bits
+            val output = BloomFilter.runModel(input._1, input._2, 4, 4, 32, seed)
+            Builder.curBuilder.genCSim(new File("bloom_filter.c"), false)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
+          }
+        }
       }
   )
   def main(args: Array[String]): Unit = {
