@@ -20,7 +20,7 @@ using namespace std;
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-#define NEEDLE "time"
+#define NEEDLE "sponsored-search"
 #define NEEDLE_SIZE (sizeof(NEEDLE) - 1)
 #define THRESHOLD 4
 
@@ -67,6 +67,7 @@ __global__ void run(uint8_t *input_full, uint32_t input_count, uint32_t *output_
 }
 
 int main(int argc, char **argv) {
+  printf("needle size: %lu\n", NEEDLE_SIZE);
   uint32_t GLOBAL_CHARS = 10000000;
   uint32_t CHARS = atoi(argv[1]);
 
