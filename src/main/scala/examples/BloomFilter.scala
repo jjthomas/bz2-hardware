@@ -75,10 +75,10 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
 
   object WhileState extends Enumeration {
     type WhileState = Value
-    val UPDATE, OUTPUT, DONE = Value
+    val FINALIZE_HASH, UPDATE_BLOOM, OUTPUT, DONE = Value
   }
   import WhileState._
-  val whileState = NewStreamReg(util.log2Ceil(WhileState.maxId), UPDATE.id)
+  val whileState = NewStreamReg(util.log2Ceil(WhileState.maxId), FINALIZE_HASH.id)
   val outputCounter = NewStreamReg(util.log2Ceil(numEntries), 0)
   val updateCounter = NewStreamReg(util.log2Ceil(numHashes), 0)
   swhen (!init.B) {
@@ -91,11 +91,16 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
   }
   swhen (init.B && byteCounter === 0.L) {
     swhile (whileState =/= DONE.id.L) {
-      swhen (whileState === UPDATE.id.L) {
+      swhen (whileState === FINALIZE_HASH.id.L) {
         var finalizedHash: StreamBits = hashes(updateCounter)
         finalizedHash = finalizedHash + (finalizedHash ## 0.L(3))
         finalizedHash = finalizedHash ^ finalizedHash(31, 11)
         finalizedHash = finalizedHash + (finalizedHash ## 0.L(15))
+        hashes(updateCounter) := finalizedHash
+        whileState := UPDATE_BLOOM.id.L
+      }
+      swhen (whileState === UPDATE_BLOOM.id.L) {
+        val finalizedHash = hashes(updateCounter)
         val updateCell = finalizedHash(util.log2Ceil(numEntries) + util.log2Ceil(bitsPerEntry) - 1,
           util.log2Ceil(bitsPerEntry))
         val updateBit = finalizedHash(util.log2Ceil(bitsPerEntry) - 1, 0)
@@ -116,6 +121,7 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
           updateCounter := 0.L
         } .otherwise {
           updateCounter := updateCounter + 1.L
+          whileState := FINALIZE_HASH.id.L
         }
       }
       swhen (whileState === OUTPUT.id.L) {
@@ -127,7 +133,7 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
         }
       }
     }
-    whileState := UPDATE.id.L
+    whileState := FINALIZE_HASH.id.L
   }
 
   for (i <- 0 until numHashes) {
