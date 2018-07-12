@@ -70,6 +70,7 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
   val hashSeeds = BloomFilter.genHashSeeds(numHashes, randSeed)
   val hashSeedRom = NewStreamVectorReg(32, numHashes, hashSeeds)
   val hashes =  NewStreamVectorReg(32, numHashes, hashSeeds)
+  val hashForUpdate = NewStreamReg(32, null)
 
   init := true.L.B
 
@@ -96,14 +97,13 @@ class BloomFilter(numItems: Int, itemBytes: Int, numEntries: Int, bitsPerEntry: 
         finalizedHash = finalizedHash + (finalizedHash ## 0.L(3))
         finalizedHash = finalizedHash ^ finalizedHash(31, 11)
         finalizedHash = finalizedHash + (finalizedHash ## 0.L(15))
-        hashes(updateCounter) := finalizedHash
+        hashForUpdate := finalizedHash
         whileState := UPDATE_BLOOM.id.L
       }
       swhen (whileState === UPDATE_BLOOM.id.L) {
-        val finalizedHash = hashes(updateCounter)
-        val updateCell = finalizedHash(util.log2Ceil(numEntries) + util.log2Ceil(bitsPerEntry) - 1,
+        val updateCell = hashForUpdate(util.log2Ceil(numEntries) + util.log2Ceil(bitsPerEntry) - 1,
           util.log2Ceil(bitsPerEntry))
-        val updateBit = finalizedHash(util.log2Ceil(bitsPerEntry) - 1, 0)
+        val updateBit = hashForUpdate(util.log2Ceil(bitsPerEntry) - 1, 0)
         var updatedBits: StreamBits = if (bitsPerEntry == 1) 1.L else bloom(updateCell)(bitsPerEntry - 1, 1) ## 1.L
         for (j <- 1 until bitsPerEntry) {
           val suffix = 1.L ## bloom(updateCell)(j - 1, 0)
