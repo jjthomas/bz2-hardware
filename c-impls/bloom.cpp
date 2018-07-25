@@ -3,6 +3,7 @@
 #include <fstream>
 #include <stdlib.h>
 #include <string.h>
+#include <immintrin.h>
 
 using namespace std;
 
@@ -20,29 +21,29 @@ void run(uint8_t *input, uint32_t input_count, uint8_t *output, uint32_t *output
   uint32_t input_idx = 0;
   uint32_t output_idx = 0;
 
-  uint32_t hash_seeds[NUM_HASHES] = {0, 1, 2, 3, 4, 5, 6, 7};
-  uint32_t hashes[NUM_HASHES] = {0, 1, 2, 3, 4, 5, 6, 7};
+  __m256i hash_seeds = _mm256_set_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+  __m256i hashes = hash_seeds;
   uint8_t bloom[NUM_BLOOM_BYTES] = {0};
   uint32_t byte_counter = 0;
   uint32_t item_counter = 0;
 
   for (uint32_t i = input_idx; i < input_count; i++) {
-    for (uint32_t j = 0; j < NUM_HASHES; j++) {
-      hashes[j] += input[i];
-      hashes[j] += hashes[j] << 10;
-      hashes[j] ^= hashes[j] >> 6;
-    }
+    __m256i input_broadcast = _mm256_set1_epi32(input[i]);
+    hashes = _mm256_add_epi32(hashes, input_broadcast);
+    hashes = _mm256_add_epi32(hashes, _mm256_sll_epi32(hashes, _mm_cvtsi32_si128(10)));
+    hashes = _mm256_xor_si256(hashes, _mm256_srl_epi32(hashes, _mm_cvtsi32_si128(6)));
     byte_counter++;
     if (byte_counter == ITEM_BYTES) {
+      hashes = _mm256_add_epi32(hashes, _mm256_sll_epi32(hashes, _mm_cvtsi32_si128(3)));
+      hashes = _mm256_xor_si256(hashes, _mm256_srl_epi32(hashes, _mm_cvtsi32_si128(11)));
+      hashes = _mm256_add_epi32(hashes, _mm256_sll_epi32(hashes, _mm_cvtsi32_si128(15)));
+      __m256i cells = _mm256_and_si256(_mm256_srl_epi32(hashes, _mm_cvtsi32_si128(3)),
+        _mm256_set1_epi32(NUM_BLOOM_BYTES - 1));
+      __m256i vals = _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_and_si256(hashes, _mm256_set1_epi32(7)));
       for (uint32_t j = 0; j < NUM_HASHES; j++) {
-        hashes[j] += hashes[j] << 3;
-        hashes[j] ^= hashes[j] >> 11;
-        hashes[j] += hashes[j] << 15;
-        uint32_t cell = (hashes[j] >> 3) & (NUM_BLOOM_BYTES - 1);
-        uint32_t bit = hashes[j] & 7;
-        bloom[cell] |= 1 << bit;
-        hashes[j] = hash_seeds[j];
+        bloom[_mm256_extract_epi32(cells, j)] |= _mm256_extract_epi32(vals, j);
       }
+      hashes = hash_seeds;
       byte_counter = 0;
       item_counter++;
     }
