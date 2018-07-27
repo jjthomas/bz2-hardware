@@ -12,7 +12,7 @@ using namespace std;
 #define BATCH_SIZE 10
 #define TREE_DEPTH 4
 #define TREE_SIZE ((1 << TREE_DEPTH) - 1)
-#define NUM_TREES 500
+#define NUM_TREES 60
 
 typedef uint8_t uint1_t;
 
