@@ -151,6 +151,7 @@ void run(uint32_t *input, uint32_t input_count, uint32_t *output, uint32_t *outp
 int main(int argc, char **argv) {
   uint32_t CHARS = atoi(argv[1]);
   uint32_t NUM_THREADS = atoi(argv[2]);
+  uint32_t BITS = atoi(argv[3]);
 
   // extracts "ad_id" and "ad_type"
   uint8_t seq_confs[] = {1, 34, 2, 97, 3, 100, 4, 95, 5, 105, 6, 100, 200, 34, 8, 121, 9, 112, 10, 101, 200, 34};
@@ -174,6 +175,11 @@ int main(int argc, char **argv) {
     chars += line.length();
   }
   chars = chars / 4 * 4;
+
+  uint32_t *input_buf32 = (uint32_t *)input_buf;
+  for (uint32_t i = 0; i < chars / 4; i++) {
+    input_buf32[i] = rand() & ((1 << BITS) - 1);
+  }
   for (uint32_t i = 1; i < NUM_THREADS; i++) {
     memcpy(input_buf + i * chars, input_buf, chars);
   }

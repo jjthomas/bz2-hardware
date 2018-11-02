@@ -9,7 +9,7 @@ using namespace std;
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-#define NEEDLE "time"
+#define NEEDLE "sponsored-search"
 #define NEEDLE_SIZE (sizeof(NEEDLE) - 1)
 #define THRESHOLD 4
 
