@@ -328,15 +328,20 @@ class StreamingWrapperIO(numInputChannels: Int, numOutputChannels: Int) extends 
     new StreamingWrapperIO(numInputChannels, numOutputChannels).asInstanceOf[this.type]
 }
 
-class StreamingWrapperBase(numInputChannels: Int, numOutputChannels: Int) extends Module {
-  val io = IO(new StreamingWrapperIO(numInputChannels, numOutputChannels))
+class StreamingMemoryControllerIO(numInputChannels: Int, numOutputChannels: Int, numStreamingCores: Int,
+                                  streamingCoreBramWidth: Int, streamingCoreNumBramAddrs: Int) extends Bundle {
+  val axi = new StreamingWrapperIO(numInputChannels, numOutputChannels)
+  val streamingCores =
+    Flipped(Vec(numStreamingCores, new StreamingCoreIO(streamingCoreBramWidth, streamingCoreNumBramAddrs)))
 }
 
-class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
-                       val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
-                       inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
-                       val puFactory: (Int) => ProcessingUnit)
-                       extends StreamingWrapperBase(numInputChannels, numOutputChannels) {
+class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: Array[Long],
+                                inputChannelBounds: Array[Int], numOutputChannels: Int,
+                                outputChannelStartAddrs: Array[Long], outputChannelBounds: Array[Int],
+                                numCores: Int, inputGroupSize: Int,
+                                inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int)
+  extends Module {
+  val io = IO(new StreamingMemoryControllerIO(numInputChannels, numOutputChannels, numCores, bramWidth, bramNumAddrs))
   assert(numCores % numInputChannels == 0)
   assert((numCores / numInputChannels) % inputGroupSize == 0)
   assert(numCores >= 2 * inputGroupSize)
@@ -355,43 +360,12 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val bramNumNativeLines = bramLineSize / 512
   val bramAddrsPerNativeLine = 512 / bramWidth
 
-  val _cores = new Array[StreamingCore](numCores)
   val curInputAddrGroup = new Array[UInt](numInputChannels)
   val curInputDataGroup = new Array[UInt](numInputChannels)
   val curOutputGroup = new Array[UInt](numOutputChannels)
 
-  def numCoresForInputChannel(channel: Int): Int = {
-    (numCores - 1 - channel) / numInputChannels + 1
-  }
-  def numCoresForOutputChannel(channel: Int): Int = {
-    (numCores - 1 - channel) / numOutputChannels + 1
-  }
-  // TODO we should pass in these bounds as arguments so there is a well-defined mapping from
-  // input to output streams that doesn't depend on the details of the below code
-  val inputChannelBounds = new Array[Int](numInputChannels + 1)
-  val outputChannelBounds = new Array[Int](numOutputChannels + 1)
-  inputChannelBounds(0) = 0
-  outputChannelBounds(0) = 0
-  for (i <- 0 until numInputChannels) {
-    inputChannelBounds(i + 1) = inputChannelBounds(i) + numCoresForInputChannel(i)
-  }
-  for (i <- 0 until numOutputChannels) {
-    outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForOutputChannel(i)
-  }
-  var curInputChannel = 0
-  var curOutputChannel = 0
-  for (i <- 0 until numCores) {
-    if (i >= inputChannelBounds(curInputChannel + 1)) {
-      curInputChannel += 1
-    }
-    if (i >= outputChannelBounds(curOutputChannel + 1)) {
-      curOutputChannel += 1
-    }
-    _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * bytesInLine, bramWidth, bramNumAddrs, puFactory, i))
-  }
-
-  val cores = VecInit(_cores.map(_.io))
+  val cores = io.streamingCores
+  val axi = io.axi
 
   val inputGroupsPerChannel = (numCores / numInputChannels) / inputGroupSize
   val inputTreeDepth = util.log2Ceil(inputGroupsPerChannel) // register depth
@@ -573,16 +547,16 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     when (!(treeCycleCounterInput === inputTreeDepth.U)) {
       treeCycleCounterInput := treeCycleCounterInput + 1.U
     }
-    io.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
-    io.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeDepth.U &&
+    axi.inputMemAddrs(i) := selInputMemAddr(i)(groupCounterInputAddr)
+    axi.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeDepth.U &&
       selInputMemAddrValid(i)(groupCounterInputAddr) && !inputMemAddrProcessed(addrPos)
-    io.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
-    when ((io.inputMemAddrValids(i) && io.inputMemAddrReadys(i)) ||
+    axi.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
+    when ((axi.inputMemAddrValids(i) && axi.inputMemAddrReadys(i)) ||
       (treeCycleCounterInput === inputTreeDepth.U && selInputMemAddrsFinished(i)(groupCounterInputAddr) // can be
         // !selInputMemAddrValid(i)(groupCounterInputAddr) for input skipping behavior
         && !inputMemAddrProcessed(addrPos))) {
       inputMemAddrProcessed(addrPos) := true.B
-      when (io.inputMemAddrValids(i)) {
+      when (axi.inputMemAddrValids(i)) {
         inputMemAddrValid(addrPos) := true.B
       }
       when (groupCounterInputAddr === (inputGroupSize - 1).U) {
@@ -620,18 +594,18 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         }
       }
     }
-    when (io.inputMemBlockReadys(i) && io.inputMemBlockValids(i)) {
+    when (axi.inputMemBlockReadys(i) && axi.inputMemBlockValids(i)) {
       nativeLineCounter := Mux(nativeLineCounter === (bramNumNativeLines - 1).U, 0.U, nativeLineCounter + 1.U)
       for (j <- 0 until bramNumAddrs) {
         when ((j / bramAddrsPerNativeLine).U === nativeLineCounter) {
-          inputBuffer(groupCounterInputBlock)(j) := io.inputMemBlocks(i)(((j % bramAddrsPerNativeLine) + 1) *
+          inputBuffer(groupCounterInputBlock)(j) := axi.inputMemBlocks(i)(((j % bramAddrsPerNativeLine) + 1) *
             bramWidth - 1, (j % bramAddrsPerNativeLine) * bramWidth)
         }
       }
     }
-    when ((io.inputMemBlockValids(i) && io.inputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
+    when ((axi.inputMemBlockValids(i) && axi.inputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
       || (inputMemAddrProcessed(dataPos) && !inputMemAddrValid(dataPos) && !inputBufferValid(groupCounterInputBlock))) {
-      when (io.inputMemBlockReadys(i)) {
+      when (axi.inputMemBlockReadys(i)) {
         inputBufferValid(groupCounterInputBlock) := true.B
       } .otherwise {
         inputMemAddrProcessed(dataPos) := false.B
@@ -647,7 +621,7 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         groupCounterInputBlock := groupCounterInputBlock + 1.U
       }
     }
-    io.inputMemBlockReadys(i) := inputMemAddrValid(dataPos) && !inputBufferValid(groupCounterInputBlock)
+    axi.inputMemBlockReadys(i) := inputMemAddrValid(dataPos) && !inputBufferValid(groupCounterInputBlock)
     for (j <- inputChannelBounds(i) / inputGroupSize until inputChannelBounds(i + 1) / inputGroupSize) {
       for (k <- j * inputGroupSize until (j + 1) * inputGroupSize) {
         val groupIdx = k - j * inputGroupSize
@@ -699,20 +673,20 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         outputMemAddr(j) := selOutputMemAddr(i)(j)
       }
     }
-    io.outputMemAddrs(i) := outputMemAddr(groupCounterOutputAddr)
-    io.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutputAddr) && !addrsComplete
-    io.outputMemAddrLens(i) := (bramNumNativeLines - 1).U
-    io.outputMemAddrIds(i) := groupCounterOutputAddr
+    axi.outputMemAddrs(i) := outputMemAddr(groupCounterOutputAddr)
+    axi.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutputAddr) && !addrsComplete
+    axi.outputMemAddrLens(i) := (bramNumNativeLines - 1).U
+    axi.outputMemAddrIds(i) := groupCounterOutputAddr
     val fullOutputBuf = outputBuffer(groupCounterOutputBlock).asUInt()
     var selectedOutputBlock = fullOutputBuf(511, 0)
     for (j <- 1 until bramNumNativeLines) {
       selectedOutputBlock = Mux(nativeLineCounter === j.U, fullOutputBuf(512 * (j + 1) - 1, 512 * j),
         selectedOutputBlock)
     }
-    io.outputMemBlocks(i) := selectedOutputBlock
-    io.outputMemBlockValids(i) := outputBufferValid(groupCounterOutputBlock)
-    io.outputMemBlockLasts(i) := nativeLineCounter === (bramNumNativeLines - 1).U
-    when ((io.outputMemAddrValids(i) && io.outputMemAddrReadys(i)) ||
+    axi.outputMemBlocks(i) := selectedOutputBlock
+    axi.outputMemBlockValids(i) := outputBufferValid(groupCounterOutputBlock)
+    axi.outputMemBlockLasts(i) := nativeLineCounter === (bramNumNativeLines - 1).U
+    when ((axi.outputMemAddrValids(i) && axi.outputMemAddrReadys(i)) ||
           (zerothCoreDelay && !outputMemAddrValid(groupCounterOutputAddr))) {
       when (groupCounterOutputAddr === (outputGroupSize - 1).U) {
         addrsComplete := true.B
@@ -720,10 +694,10 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
         groupCounterOutputAddr := groupCounterOutputAddr + 1.U
       }
     }
-    when (io.outputMemBlockValids(i) && io.outputMemBlockReadys(i)) {
+    when (axi.outputMemBlockValids(i) && axi.outputMemBlockReadys(i)) {
       nativeLineCounter := Mux(nativeLineCounter === (bramNumNativeLines - 1).U, 0.U, nativeLineCounter + 1.U)
     }
-    when ((io.outputMemBlockValids(i) && io.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
+    when ((axi.outputMemBlockValids(i) && axi.outputMemBlockReadys(i) && nativeLineCounter === (bramNumNativeLines - 1).U)
       || (!outputMemAddrValid(groupCounterOutputBlock) &&
           (groupCounterOutputBlock < groupCounterOutputAddr || addrsComplete))) {
       when (groupCounterOutputBlock === (outputGroupSize - 1).U) {
@@ -760,7 +734,55 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   for (i <- 0 until numOutputChannels) {
     cumFinished = cumFinished && outputChannelsComplete(i)
   }
-  io.finished := cumFinished
+  axi.finished := cumFinished
+}
+
+class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
+                       val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
+                       inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
+                       val puFactory: (Int) => ProcessingUnit) extends Module {
+  val io = IO(new StreamingWrapperIO(numInputChannels, numOutputChannels))
+  val bramLineSize = bramWidth * bramNumAddrs
+  val bytesInLine = bramLineSize / 8
+  def numCoresForInputChannel(channel: Int): Int = {
+    (numCores - 1 - channel) / numInputChannels + 1
+  }
+  def numCoresForOutputChannel(channel: Int): Int = {
+    (numCores - 1 - channel) / numOutputChannels + 1
+  }
+  // TODO we should pass in these bounds as arguments so there is a well-defined mapping from
+  // input to output streams that doesn't depend on the details of the below code
+  val inputChannelBounds = new Array[Int](numInputChannels + 1)
+  val outputChannelBounds = new Array[Int](numOutputChannels + 1)
+  val _cores = new Array[StreamingCore](numCores)
+  inputChannelBounds(0) = 0
+  outputChannelBounds(0) = 0
+  for (i <- 0 until numInputChannels) {
+    inputChannelBounds(i + 1) = inputChannelBounds(i) + numCoresForInputChannel(i)
+  }
+  for (i <- 0 until numOutputChannels) {
+    outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForOutputChannel(i)
+  }
+  var curInputChannel = 0
+  var curOutputChannel = 0
+  for (i <- 0 until numCores) {
+    if (i >= inputChannelBounds(curInputChannel + 1)) {
+      curInputChannel += 1
+    }
+    if (i >= outputChannelBounds(curOutputChannel + 1)) {
+      curOutputChannel += 1
+    }
+    _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
+      (i - inputChannelBounds(curInputChannel)) * bytesInLine, bramWidth, bramNumAddrs, puFactory, i))
+  }
+
+  val mc = Module(new StreamingMemoryController(numInputChannels, inputChannelStartAddrs, inputChannelBounds,
+    numOutputChannels, outputChannelStartAddrs, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
+    outputGroupSize, bramWidth, bramNumAddrs))
+  mc.axi <> io
+  for (i <- 0 until numCores) {
+    mc.cores(i) <> _cores(i).io
+  }
 }
 
 object StreamingWrapperDriver extends App {

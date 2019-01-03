@@ -2,7 +2,8 @@ package examples
 
 import chisel3._
 
-class BandwidthTest extends StreamingWrapperBase(4, 4) {
+class BandwidthTest extends Module {
+  val io = IO(new StreamingWrapperIO(4, 4))
   var finished = true.B
   for (i <- 0 until 4) {
     val outputStart = RegInit(536870912.asUInt(31.W)) // initialized so that finished is not immediately asserted
