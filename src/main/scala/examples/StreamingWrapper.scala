@@ -137,6 +137,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => Processin
 class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
 
+  val metadataPtr = Input(UInt(32.W))
   val inputMemAddr = Output(UInt(32.W))
   val inputMemAddrValid = Output(Bool())
   val inputMemAddrsFinished = Output(Bool())
@@ -155,7 +156,7 @@ class StreamingCoreIO(bramWidth: Int, bramNumAddrs: Int) extends Bundle {
 }
 
 // TODO current limitation: all addresses must be 512-bit aligned
-class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit,
+class StreamingCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit,
                     coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
   val bramLineSize = bramWidth * bramNumAddrs
@@ -170,7 +171,7 @@ class StreamingCore(metadataPtr: Long, bramWidth: Int, bramNumAddrs: Int, puFact
   val outputBits = RegInit(0.asUInt(32.W))
   val outputBlockCounter = RegInit(0.asUInt(bramAddrBits.W))
   val outputLengthSent = RegInit(false.B)
-  val inputMemAddr = RegInit(metadataPtr.asUInt(32.W))
+  val inputMemAddr = RegInit(io.metadataPtr)
   val outputMemAddr = Reg(UInt(32.W))
   val outputLenAddr = Reg(UInt(32.W))
   val outputMemFlushed = RegInit(false.B)
@@ -336,10 +337,9 @@ class StreamingMemoryControllerIO(numInputChannels: Int, numOutputChannels: Int,
 }
 
 class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: Array[Long],
-                                inputChannelBounds: Array[Int], numOutputChannels: Int,
-                                outputChannelStartAddrs: Array[Long], outputChannelBounds: Array[Int],
-                                numCores: Int, inputGroupSize: Int,
-                                inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int)
+                                inputChannelBounds: Array[Int], numOutputChannels: Int, outputChannelBounds: Array[Int],
+                                numCores: Int, inputGroupSize: Int, inputNumReadAheadGroups: Int, outputGroupSize: Int,
+                                bramWidth: Int, bramNumAddrs: Int)
   extends Module {
   val io = IO(new StreamingMemoryControllerIO(numInputChannels, numOutputChannels, numCores, bramWidth, bramNumAddrs))
   assert(numCores % numInputChannels == 0)
@@ -366,6 +366,15 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
 
   val cores = io.streamingCores
   val axi = io.axi
+
+  var curInputChannel = 0
+  for (i <- 0 until numCores) {
+    if (i >= inputChannelBounds(curInputChannel + 1)) {
+      curInputChannel += 1
+    }
+    cores(i).metadataPtr :=
+      (inputChannelStartAddrs(curInputChannel) + (i - inputChannelBounds(curInputChannel)) * bytesInLine).U
+  }
 
   val inputGroupsPerChannel = (numCores / numInputChannels) / inputGroupSize
   val inputTreeDepth = util.log2Ceil(inputGroupsPerChannel) // register depth
@@ -754,7 +763,6 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   // input to output streams that doesn't depend on the details of the below code
   val inputChannelBounds = new Array[Int](numInputChannels + 1)
   val outputChannelBounds = new Array[Int](numOutputChannels + 1)
-  val _cores = new Array[StreamingCore](numCores)
   inputChannelBounds(0) = 0
   outputChannelBounds(0) = 0
   for (i <- 0 until numInputChannels) {
@@ -763,25 +771,14 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   for (i <- 0 until numOutputChannels) {
     outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForOutputChannel(i)
   }
-  var curInputChannel = 0
-  var curOutputChannel = 0
-  for (i <- 0 until numCores) {
-    if (i >= inputChannelBounds(curInputChannel + 1)) {
-      curInputChannel += 1
-    }
-    if (i >= outputChannelBounds(curOutputChannel + 1)) {
-      curOutputChannel += 1
-    }
-    _cores(i) = Module(new StreamingCore(inputChannelStartAddrs(curInputChannel) +
-      (i - inputChannelBounds(curInputChannel)) * bytesInLine, bramWidth, bramNumAddrs, puFactory, i))
-  }
 
   val mc = Module(new StreamingMemoryController(numInputChannels, inputChannelStartAddrs, inputChannelBounds,
-    numOutputChannels, outputChannelStartAddrs, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
+    numOutputChannels, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
     outputGroupSize, bramWidth, bramNumAddrs))
   mc.axi <> io
   for (i <- 0 until numCores) {
-    mc.cores(i) <> _cores(i).io
+    val core = Module(new StreamingCore(bramWidth, bramNumAddrs, puFactory, i))
+    mc.cores(i) <> core.io
   }
 }
 
