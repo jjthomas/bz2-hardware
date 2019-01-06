@@ -1,7 +1,7 @@
 package examples
 
 import chisel3._
-import chisel3.core.{Reg, Bundle, Module}
+import chisel3.core.{Bundle, Module, Reg, dontTouch}
 
 class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
@@ -374,6 +374,7 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
     }
     cores(i).metadataPtr :=
       (inputChannelStartAddrs(curInputChannel) + (i - inputChannelBounds(curInputChannel)) * bytesInLine).U
+    dontTouch(cores(i).metadataPtr)
   }
 
   val inputGroupsPerChannel = (numCores / numInputChannels) / inputGroupSize
@@ -560,6 +561,7 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
     axi.inputMemAddrValids(i) := treeCycleCounterInput === inputTreeDepth.U &&
       selInputMemAddrValid(i)(groupCounterInputAddr) && !inputMemAddrProcessed(addrPos)
     axi.inputMemAddrLens(i) := (bramNumNativeLines - 1).U
+    dontTouch(axi.inputMemAddrLens(i))
     when ((axi.inputMemAddrValids(i) && axi.inputMemAddrReadys(i)) ||
       (treeCycleCounterInput === inputTreeDepth.U && selInputMemAddrsFinished(i)(groupCounterInputAddr) // can be
         // !selInputMemAddrValid(i)(groupCounterInputAddr) for input skipping behavior
@@ -685,6 +687,7 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
     axi.outputMemAddrs(i) := outputMemAddr(groupCounterOutputAddr)
     axi.outputMemAddrValids(i) := outputMemAddrValid(groupCounterOutputAddr) && !addrsComplete
     axi.outputMemAddrLens(i) := (bramNumNativeLines - 1).U
+    dontTouch(axi.outputMemAddrLens(i))
     axi.outputMemAddrIds(i) := groupCounterOutputAddr
     val fullOutputBuf = outputBuffer(groupCounterOutputBlock).asUInt()
     var selectedOutputBlock = fullOutputBuf(511, 0)
