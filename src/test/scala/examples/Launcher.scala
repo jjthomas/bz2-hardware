@@ -9,18 +9,20 @@ import utils.TutorialRunner
 
 object Launcher {
   def runStreamingTest(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
-                       outputs: Array[(Int, BigInt)]): StreamingWrapperTests = {
-    for (((numInputBits, inputBits), (expectedNumOutputBits, expectedOutputBits)) <- inputs.zip(outputs)) {
-      val (numOutputBits, outputBits) = Builder.curBuilder.simulate(numInputBits, inputBits)
-      assert(numOutputBits == expectedNumOutputBits)
-      assert(outputBits == expectedOutputBits)
+                       outputs: Array[(Int, BigInt)], runSim: Boolean): StreamingWrapperTests = {
+    if (runSim) {
+      for (((numInputBits, inputBits), (expectedNumOutputBits, expectedOutputBits)) <- inputs.zip(outputs)) {
+        val (numOutputBits, outputBits) = Builder.curBuilder.simulate(numInputBits, inputBits)
+        assert(numOutputBits == expectedNumOutputBits)
+        assert(outputBits == expectedOutputBits)
+      }
     }
     new StreamingWrapperTests(c, inputs, outputs)
   }
-  def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String]): StreamingWrapperTests = {
+  def runStreamingTest(c: StreamingWrapper, inputs: Array[String], outputs: Array[String], runSim: Boolean): StreamingWrapperTests = {
     val bitInputs = inputs.map(i => Util.charsToBits(i.toCharArray))
     val bitOutputs = outputs.map(o => Util.charsToBits(o.toCharArray))
-    runStreamingTest(c, bitInputs, bitOutputs)
+    runStreamingTest(c, bitInputs, bitOutputs, runSim)
   }
   val examples = Map(
       "Combinational" -> { (backendName: String) =>
@@ -143,13 +145,23 @@ object Launcher {
           (c) => new InsertionSorterTests(c)
         }
       },
+      "StreamingWrapperBB" -> { (backendName: String) =>
+        Driver(() => new StreamingWrapper(1, Array(0L), 1, Array(1000000000L),
+          2, 1, 1, 1, 32, 32, (coreId: Int) => new PassThrough(32, coreId), true),
+          backendName) {
+          (c) => {
+            val inputs = (0 until 2).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar).toArray)).toArray
+            runStreamingTest(c, inputs, inputs, false)
+          }
+        }
+      },
       "StreamingWrapper1" -> { (backendName: String) =>
         Driver(() => new StreamingWrapper(4, Array(0L, 0L, 0L, 0L), 4, Array(1000000000L, 1000000000L, 1000000000L,
           1000000000L), 4, 1, 1, 1, 16, 32, (coreId: Int) => new PassThrough(8, coreId)),
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 63).map(j => (i + j).toChar))).toArray
-            runStreamingTest(c, inputs, inputs)
+            runStreamingTest(c, inputs, inputs, true)
           }
         }
       },
@@ -159,7 +171,7 @@ object Launcher {
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 65).map(j => (i + j).toChar))).toArray
-            runStreamingTest(c, inputs, inputs)
+            runStreamingTest(c, inputs, inputs, true)
           }
         }
       },
@@ -170,7 +182,7 @@ object Launcher {
           backendName) {
           (c) => {
             val inputs = (0 until 12).map(i => String.valueOf((0 until 67).map(j => (i + j).toChar))).toArray
-            runStreamingTest(c, inputs, inputs)
+            runStreamingTest(c, inputs, inputs, true)
           }
         }
       },
@@ -180,7 +192,7 @@ object Launcher {
           backendName) {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 62).map(j => (i + j).toChar))).toArray
-            runStreamingTest(c, inputs, inputs)
+            runStreamingTest(c, inputs, inputs, true)
           }
         }
       },
@@ -191,7 +203,7 @@ object Launcher {
           (c) => {
             val inputs = (0 until 4).map(i => String.valueOf((0 until 128).map(j => (i + j).toChar))).toArray
             Builder.curBuilder.genCSim(new File("pass_through.c"), false)
-            runStreamingTest(c, inputs, inputs)
+            runStreamingTest(c, inputs, inputs, true)
           }
         }
       },
@@ -203,7 +215,7 @@ object Launcher {
             val inputs = Array("1111\"2,2\",21112\n1,2", "1,21112", "111,21112", "11,21112")
             val outputs = Array("1111\"2,2\",1,", "1,", "111,", "11,")
             Builder.curBuilder.genCSim(new File("csv_field_extractor.c"), false)
-            runStreamingTest(c, inputs, outputs)
+            runStreamingTest(c, inputs, outputs, true)
           }
         }
       },
@@ -221,7 +233,7 @@ object Launcher {
             val outputs = Array(s"${matchStrs(0)}1,${matchStrs(1)}3,${matchStrs(2)}$longNum/",
               s"${matchStrs(2)}4,/", "/", "/")
             Builder.curBuilder.genCSim(new File("json_field_extractor_specific.c"), false)
-            runStreamingTest(c, inputs, outputs)
+            runStreamingTest(c, inputs, outputs, true)
           }
         }
       },
@@ -242,7 +254,7 @@ object Launcher {
             val outputs = Array(s"${matchStrs(0)}1,${matchStrs(1)}3,${matchStrs(2)}$longNum/",
               s"${matchStrs(2)}4,/", "/", "/").map(str => Util.charsToBits(str.toCharArray))
             Builder.curBuilder.genCSim(new File("json_field_extractor_generic.c"), false)
-            runStreamingTest(c, inputs, outputs)
+            runStreamingTest(c, inputs, outputs, true)
           }
         }
       },
@@ -256,7 +268,7 @@ object Launcher {
             // Array(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 20, 32)
             val output = IntegerCoder.runCoder(input._1, input._2, 32, 4, Array(1, 6, 11, 16))
             Builder.curBuilder.genCSim(new File("integer_coder.c"), false)
-            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray, true)
           }
         }
       },
@@ -268,7 +280,7 @@ object Launcher {
             val seed = 2956547051745311985L
             val (input, output) = GBDT.genInputAndOutput(2, 25, 7, 2, 2, seed)
             Builder.curBuilder.genCSim(new File("gbdt.c"), false)
-            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray, true)
           }
         }
       },
@@ -283,7 +295,7 @@ object Launcher {
             val output = (32, BigInt(3))
             val outputs = Array(output, output, output, output)
             Builder.curBuilder.genCSim(new File("sw.c"), false)
-            runStreamingTest(c, inputs, outputs)
+            runStreamingTest(c, inputs, outputs, true)
           }
         }
       },
@@ -318,7 +330,7 @@ object Launcher {
             val output = (32, BigInt(3))
             val outputs = Array(output, output, output, output)
             Builder.curBuilder.genCSim(new File("regex.c"), false)
-            runStreamingTest(c, inputs, outputs)
+            runStreamingTest(c, inputs, outputs, true)
           }
         }
       },
@@ -332,7 +344,7 @@ object Launcher {
             // standard is 3072 items, 32768 bloom bits
             val output = BloomFilter.runModel(input._1, input._2, 4, 4, 32, seed)
             Builder.curBuilder.genCSim(new File("bloom_filter.c"), false)
-            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray)
+            runStreamingTest(c, (0 until 4).map(_ => input).toArray, (0 until 4).map(_ => output).toArray, true)
           }
         }
       }

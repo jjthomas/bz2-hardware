@@ -2,6 +2,7 @@ package examples
 
 import chisel3._
 import chisel3.core.{Bundle, Module, Reg, dontTouch}
+import chisel3.util.HasBlackBoxResource
 
 class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
@@ -749,10 +750,21 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
   axi.finished := cumFinished
 }
 
+class StreamingWrapperBBIO(numInputChannels: Int, numOutputChannels: Int) extends Bundle {
+  val axi = new StreamingWrapperIO(numInputChannels, numOutputChannels)
+  val clock = Input(Clock())
+  val reset = Input(Bool())
+}
+
+class StreamingWrapperBB(val numInputChannels: Int, val numOutputChannels: Int) extends BlackBox with HasBlackBoxResource {
+  val io = IO(new StreamingWrapperBBIO(numInputChannels, numOutputChannels))
+  setResource("/chisel_from_dcp.v")
+}
+
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
                        val outputChannelStartAddrs: Array[Long], val numCores: Int, inputGroupSize: Int,
                        inputNumReadAheadGroups: Int, outputGroupSize: Int, bramWidth: Int, bramNumAddrs: Int,
-                       val puFactory: (Int) => ProcessingUnit) extends Module {
+                       val puFactory: (Int) => ProcessingUnit, useBB: Boolean = false) extends Module {
   val io = IO(new StreamingWrapperIO(numInputChannels, numOutputChannels))
   val bramLineSize = bramWidth * bramNumAddrs
   val bytesInLine = bramLineSize / 8
@@ -775,13 +787,20 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
     outputChannelBounds(i + 1) = outputChannelBounds(i) + numCoresForOutputChannel(i)
   }
 
-  val mc = Module(new StreamingMemoryController(numInputChannels, inputChannelStartAddrs, inputChannelBounds,
-    numOutputChannels, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
-    outputGroupSize, bramWidth, bramNumAddrs))
-  mc.axi <> io
-  for (i <- 0 until numCores) {
-    val core = Module(new StreamingCore(bramWidth, bramNumAddrs, puFactory, i))
-    mc.cores(i) <> core.io
+  if (useBB) {
+    val bb = Module(new StreamingWrapperBB(numInputChannels, numOutputChannels))
+    bb.io.axi <> io
+    bb.io.clock := clock
+    bb.io.reset := reset
+  } else {
+    val mc = Module(new StreamingMemoryController(numInputChannels, inputChannelStartAddrs, inputChannelBounds,
+      numOutputChannels, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
+      outputGroupSize, bramWidth, bramNumAddrs))
+    mc.axi <> io
+    for (i <- 0 until numCores) {
+      val core = Module(new StreamingCore(bramWidth, bramNumAddrs, puFactory, i))
+      mc.cores(i) <> core.io
+    }
   }
 }
 
