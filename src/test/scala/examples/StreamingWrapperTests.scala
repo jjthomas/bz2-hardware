@@ -81,6 +81,8 @@ class StreamingWrapperTests(c: StreamingWrapper, inputs: Array[(Int, BigInt)],
     step(1)
     poke(c.io.inputMemBlockValids(channel), false)
   }
+  step(2 * StreamingWrapper.CORE_PIPE_DEPTH) // wait for memory controller to be fully reset (top level reset is
+  // triggered in a cycle before this step)
   for (i <- 0 until c.numInputChannels) {
     poke(c.io.inputMemAddrReadys(i), false)
     poke(c.io.inputMemBlockValids(i), false)

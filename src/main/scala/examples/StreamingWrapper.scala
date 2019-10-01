@@ -1,7 +1,7 @@
 package examples
 
 import chisel3._
-import chisel3.core.{Bundle, Module, Reg, dontTouch}
+import chisel3.core.{ActualDirection, Bundle, DataMirror, Module, Reg, dontTouch, withReset}
 
 class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => ProcessingUnit, coreId: Int) extends Module {
   val bramAddrBits = util.log2Ceil(bramNumAddrs)
@@ -53,6 +53,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => Processin
   inputBram.io.b_wr := false.B
   val inputReadAddrFinal = Wire(UInt(bramAddrBits.W))
   inputBram.io.b_addr := inputReadAddrFinal
+  inputBram.io.b_din := 0.U // tie off
   // inputPieceBitsRemaining === 0.U is true at the start and end of the reading of a block, here
   // we ensure that we capture it only in the start case
   when ((inputPieceBitsRemaining === 0.U && !(inputBitsRemaining === 0.U)) ||
@@ -107,6 +108,7 @@ class InnerCore(bramWidth: Int, bramNumAddrs: Int, puFactory: (Int) => Processin
   val outputReadingStarted = RegInit(false.B)
   outputBram.io.b_wr := false.B
   outputBram.io.b_addr := outputReadAddr
+  outputBram.io.b_din := 0.U // tie off
   when (!outputReadingStartedPrev &&
     (outputBits === bramLineSize.U || (inner.io.outputFinished && outputBits > 0.U &&
       outputPieceBits === bramWidth.U))) {
@@ -334,6 +336,11 @@ class StreamingMemoryControllerIO(numInputChannels: Int, numOutputChannels: Int,
   val axi = new StreamingWrapperIO(numInputChannels, numOutputChannels)
   val streamingCores =
     Flipped(Vec(numStreamingCores, new StreamingCoreIO(streamingCoreBramWidth, streamingCoreNumBramAddrs)))
+  val streamingCoreReset = Output(Bool())
+
+  override def cloneType(): this.type =
+    new StreamingMemoryControllerIO(numInputChannels, numOutputChannels, numStreamingCores, streamingCoreBramWidth,
+      streamingCoreNumBramAddrs).asInstanceOf[this.type]
 }
 
 class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: Array[Long],
@@ -360,12 +367,37 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
   val bramNumNativeLines = bramLineSize / 512
   val bramAddrsPerNativeLine = 512 / bramWidth
 
+  var cores = Reg(io.streamingCores.cloneType)
+  io.streamingCores <> cores
+  var streamingCoreReset = RegNext(reset)
+  for (i <- 0 until StreamingWrapper.CORE_PIPE_DEPTH - 2) {
+    val coresNext = Reg(io.streamingCores.cloneType)
+    for (j <- 0 until coresNext.length) {
+      for ((name, data) <- io.streamingCores(0).elements) {
+        if (DataMirror.directionOf(data) == ActualDirection.Input) {
+          coresNext(j).elements(name) := cores(j).elements(name)
+        } else {
+          cores(j).elements(name) := coresNext(j).elements(name)
+        }
+      }
+    }
+    cores = coresNext
+    streamingCoreReset = RegNext(streamingCoreReset)
+  }
+  io.streamingCoreReset := streamingCoreReset
+  val axi = io.axi
+
+  var selfReset = RegNext(reset, init = true.B) // true initialization ensures that cores see acceptable values
+  // from the controller after they are reset
+  for (i <- 0 until 2 * StreamingWrapper.CORE_PIPE_DEPTH - 1) { // wait for cores to be reset and correct values to be
+    // propagated back to us
+    selfReset = RegNext(selfReset, init = true.B)
+  }
+
+  withReset(selfReset) {
   val curInputAddrGroup = new Array[UInt](numInputChannels)
   val curInputDataGroup = new Array[UInt](numInputChannels)
   val curOutputGroup = new Array[UInt](numOutputChannels)
-
-  val cores = io.streamingCores
-  val axi = io.axi
 
   var curInputChannel = 0
   for (i <- 0 until numCores) {
@@ -747,6 +779,7 @@ class StreamingMemoryController(numInputChannels: Int, inputChannelStartAddrs: A
     cumFinished = cumFinished && outputChannelsComplete(i)
   }
   axi.finished := cumFinished
+  }
 }
 
 class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Array[Long], val numOutputChannels: Int,
@@ -778,11 +811,18 @@ class StreamingWrapper(val numInputChannels: Int, val inputChannelStartAddrs: Ar
   val mc = Module(new StreamingMemoryController(numInputChannels, inputChannelStartAddrs, inputChannelBounds,
     numOutputChannels, outputChannelBounds, numCores, inputGroupSize, inputNumReadAheadGroups,
     outputGroupSize, bramWidth, bramNumAddrs))
-  mc.axi <> io
+  mc.io.axi <> io
   for (i <- 0 until numCores) {
-    val core = Module(new StreamingCore(bramWidth, bramNumAddrs, puFactory, i))
-    mc.cores(i) <> core.io
+    val coreResetReg = RegNext(mc.io.streamingCoreReset)
+    val core = withReset(coreResetReg) { Module(new StreamingCore(bramWidth, bramNumAddrs, puFactory, i)) }
+    val coreRegs = Reg(core.io.cloneType)
+    mc.io.streamingCores(i) <> coreRegs
+    coreRegs <> core.io
   }
+}
+
+object StreamingWrapper {
+  val CORE_PIPE_DEPTH = 2 // >= 2
 }
 
 object StreamingWrapperDriver extends App {

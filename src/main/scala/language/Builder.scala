@@ -683,6 +683,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     // BRAM reads
     for (((cb, reads), i) <- chiselBrams.zip(bramReads).zipWithIndex) {
       cb.io.a_wr := false.B
+      cb.io.a_din := 0.U
       if (reads.length > 0) {
         // If the current tick is being flushed, we send its results into the RAM read ports
         // so that RAM reads will be available for the next input (if there is one) on the next cycle.
