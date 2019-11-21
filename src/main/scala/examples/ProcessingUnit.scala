@@ -8,7 +8,6 @@ class ProcessingUnitIO(inputWordSize: Int, outputWordSize: Int) extends Bundle {
   val inputWord = Input(UInt(inputWordSize.W))
   val inputValid = Input(Bool())
   val inputFinished = Input(Bool()) // asserted on all cycles after the last valid input word
-  val inputReady = Output(Bool())
   val outputWord = Output(UInt(outputWordSize.W))
   val outputValid = Output(Bool())
   val outputFinished = Output(Bool()) // asserted on all cycles after the last valid output word
@@ -18,5 +17,5 @@ class ProcessingUnitIO(inputWordSize: Int, outputWordSize: Int) extends Bundle {
 }
 abstract class ProcessingUnit(val inputWordSize: Int, val outputWordSize: Int, coreId: Int) extends Module {
   val io = IO(new ProcessingUnitIO(inputWordSize, outputWordSize))
-  Builder.nextBuilder(inputWordSize, outputWordSize, io, coreId)
+  // Builder.nextBuilder(inputWordSize, outputWordSize, io, coreId)
 }

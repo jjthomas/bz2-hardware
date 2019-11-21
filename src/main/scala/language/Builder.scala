@@ -582,7 +582,7 @@ class Builder(val inputWidth: Int, val outputWidth: Int, io: ProcessingUnitIO, c
     val pipeStateWidth = util.log2Ceil(maxReadDepth + 1)
     val pipeState = RegInit(0.asUInt(pipeStateWidth.W))
     val pipeActive = pipeState =/= 0.U
-    io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
+    // io.inputReady := (!pipeActive && !inputRegValid) || (pipeFinishing && swhileDone && nextTickMemsReady)
     pipeFinalState := pipeState === maxReadDepth.U
     // TODO if this tick doesn't do any depth 1 RAM reads and we have a pipeline with depth > 1,
     // it may be possible to run the tick in fewer cycles by considering the depth 2 reads to be done
