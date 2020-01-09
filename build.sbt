@@ -1,3 +1,5 @@
+// CRITICAL FIXME: commit 9e47f8e from jjthomas/Fleet needs to be backported here
+
 def scalacOptionsVersion(scalaVersion: String): Seq[String] = {
   Seq() ++ {
     // If we're building with Scala > 2.11, enable the compile option
